@@ -31,6 +31,10 @@ class Settings:
     max_realerts: int = 3
     # Consecutive failed checks before alerting that the bot itself is broken.
     failures_before_alert: int = 3
+    # A colas lookup slower than this (or a timeout) sends a "posible" alert: DIAN slows
+    # down when slots open. Normal is ~1-3 s.
+    slow_seconds: int = 10
+    possible_cooldown_seconds: int = 1800
     # Bogota hour after which the first run of the day sends the "still alive" summary.
     heartbeat_hour: int = 8
     booking_url: str = "https://agendamiento.dian.gov.co/?recurso=CitasDIAN"
@@ -48,6 +52,9 @@ class Settings:
             realert_seconds=int(_env("DIAN_REALERT_SECONDS", cls.realert_seconds)),
             max_realerts=int(_env("DIAN_MAX_REALERTS", cls.max_realerts)),
             failures_before_alert=int(_env("DIAN_FAILURES_BEFORE_ALERT", cls.failures_before_alert)),
+            slow_seconds=int(_env("DIAN_SLOW_SECONDS", cls.slow_seconds)),
+            possible_cooldown_seconds=int(_env("DIAN_POSSIBLE_COOLDOWN_SECONDS",
+                                               cls.possible_cooldown_seconds)),
             heartbeat_hour=int(_env("DIAN_HEARTBEAT_HOUR", cls.heartbeat_hour)),
         )
 

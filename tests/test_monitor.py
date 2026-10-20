@@ -10,7 +10,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from dian_monitor import cadence  # noqa: E402
 from dian_monitor.check import FOUND, NONE, city_of, evaluate  # noqa: E402
-from dian_monitor.client import Blocked, DianClient, DianError, SchemaChanged  # noqa: E402
+from dian_monitor.client import (Blocked, DianClient, DianError, SchemaChanged,  # noqa: E402
+                                 TimedOut)
 from dian_monitor.config import Settings  # noqa: E402
 from dian_monitor.monitor import Monitor  # noqa: E402
 from dian_monitor.notify import ConsoleNotifier  # noqa: E402
@@ -75,13 +76,16 @@ class FakeSession:
 class FakeClient:
     """Monitor-level fake: each find_colas returns/raises the next queued item."""
 
-    def __init__(self, items):
+    def __init__(self, items, latencies=None):
         self.items = list(items)
+        self.latencies = list(latencies or [])
         self.requests_made = 0
         self.resets = 0
+        self.last_latency = None
 
     def find_colas(self, *args):
         item = self.items.pop(0)
+        self.last_latency = self.latencies.pop(0) if self.latencies else 1.0
         if isinstance(item, Exception):
             raise item
         return item
@@ -105,13 +109,13 @@ class Clock:
 FRIDAY = datetime(2026, 10, 23, 9, 30, tzinfo=cadence.BOGOTA)
 
 
-def make_monitor(items, start=FRIDAY, **overrides):
+def make_monitor(items, start=FRIDAY, latencies=None, **overrides):
     tmp = tempfile.mkdtemp()
     settings = replace(Settings(), state_file=os.path.join(tmp, "state.json"),
                        captures_dir=os.path.join(tmp, "captures"), **overrides)
     clock = Clock(start)
     notifier = ConsoleNotifier()
-    mon = Monitor(settings, notifier, client=FakeClient(items), clock=clock,
+    mon = Monitor(settings, notifier, client=FakeClient(items, latencies), clock=clock,
                   sleep=clock.sleep, rand=lambda a, b: (a + b) / 2)
     return mon, notifier, clock
 
@@ -273,6 +277,43 @@ class MonitorTest(unittest.TestCase):
         beats = [m for m in notifier.sent if "sigue vivo" in m.text]
         self.assertEqual(len(beats), 2)
         self.assertIn("2 revisiones", beats[1].text)
+
+
+class SlowDianTest(unittest.TestCase):
+    def possibles(self, notifier):
+        return [m for m in notifier.sent if "POSIBLE" in m.text]
+
+    def test_slow_answer_sends_one_possible_alert_with_cooldown(self):
+        none = colas("colas_none.json")
+        mon, notifier, clock = make_monitor([none] * 4, latencies=[2, 25, 30, 22],
+                                            heartbeat_hour=23)
+        mon.poll()                      # 2 s: normal
+        self.assertEqual(self.possibles(notifier), [])
+        mon.poll()                      # 25 s: posible
+        clock.now += timedelta(minutes=10)
+        mon.poll()                      # still slow, inside the 30 min cooldown
+        self.assertEqual(len(self.possibles(notifier)), 1)
+        self.assertIn("25 s", self.possibles(notifier)[0].text)
+        self.assertTrue(self.possibles(notifier)[0].urgent)
+        clock.now += timedelta(minutes=25)
+        mon.poll()                      # cooldown over
+        self.assertEqual(len(self.possibles(notifier)), 2)
+        self.assertEqual(len(mon.state["slow_events"]), 3)
+
+    def test_timeout_is_a_possible_and_a_failure(self):
+        mon, notifier, _ = make_monitor([TimedOut("no answer")], heartbeat_hour=23)
+        mon.poll()
+        self.assertEqual(len(self.possibles(notifier)), 1)
+        self.assertIn("no respondió", notifier.sent[0].text)
+        self.assertEqual(mon.state["consecutive_failures"], 1)
+
+    def test_no_possible_when_medellin_is_confirmed(self):
+        found = colas("colas_medellin.json")
+        mon, notifier, _ = make_monitor([found, found], latencies=[30, 30], heartbeat_hour=23)
+        mon.poll()
+        mon.poll()
+        self.assertEqual(self.possibles(notifier), [])
+        self.assertEqual(len([m for m in notifier.sent if "HAY CITA" in m.text]), 1)
 
 
 class TelegramTest(unittest.TestCase):

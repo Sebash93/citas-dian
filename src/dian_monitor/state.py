@@ -20,6 +20,8 @@ def empty():
         "errors_today": 0,
         "today": None,
         "last_check_at": None,
+        "last_possible_at": None,
+        "slow_events": [],          # [{"at": iso, "seconds": float, "timed_out": bool}]
         "history": [],              # [{"opened": iso, "closed": iso|None, "matches": [...]}]
     }
 
@@ -37,6 +39,7 @@ def load(path):
 
 def save(path, state):
     state["history"] = state["history"][-MAX_HISTORY:]
+    state["slow_events"] = state["slow_events"][-MAX_HISTORY:]
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:

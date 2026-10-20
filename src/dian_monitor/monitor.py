@@ -8,7 +8,8 @@ from datetime import datetime, timedelta
 from . import cadence, notify
 from . import state as state_mod
 from .check import FOUND, evaluate
-from .client import Blocked, DianClient, DianError
+from .client import TIMEOUT as TIMEOUT_SECONDS
+from .client import Blocked, DianClient, DianError, TimedOut
 
 MAX_BLOCK_PAUSE_MIN = 120
 
@@ -95,6 +96,20 @@ class Monitor:
             self.notifier.send(notify.blocked(blocks, until))
             self.state["failure_alert_sent"] = True
 
+    def _on_slow(self, now, seconds, timed_out):
+        """DIAN slows down when slots open: send a 'posible' alert, rate-limited."""
+        st = self.state
+        st["slow_events"].append({"at": _iso(now), "seconds": round(seconds, 1),
+                                  "timed_out": timed_out})
+        log(f"DIAN slow: {seconds:.1f} s{' (timed out)' if timed_out else ''}")
+        if st["open_since"]:
+            return  # a confirmed Medellín alert is already out
+        last = _parse(st["last_possible_at"])
+        if last and (now - last).total_seconds() < self.settings.possible_cooldown_seconds:
+            return
+        self.notifier.send(notify.possible(self.settings, seconds, now, timed_out))
+        st["last_possible_at"] = _iso(now)
+
     def _on_result(self, now, result):
         st = self.state
         if result.status != FOUND:
@@ -146,14 +161,22 @@ class Monitor:
             self._on_blocked(now, e)
             self._save()
             return False
+        except TimedOut as e:
+            self._on_failure(e)
+            self._on_slow(now, float(TIMEOUT_SECONDS), timed_out=True)
+            self._save()
+            return True
         except DianError as e:
             self._on_failure(e)
             self._save()
             return True
         self._on_success(now)
+        latency = self.client.last_latency
         log(f"Check: {result.status} {result.matches or ''} "
-            f"(requests so far: {self.client.requests_made})")
+            f"({latency or 0:.1f} s, requests so far: {self.client.requests_made})")
         self._on_result(now, result)
+        if result.status != FOUND and latency is not None and latency >= s.slow_seconds:
+            self._on_slow(now, latency, timed_out=False)
         self._save()
         return True
 

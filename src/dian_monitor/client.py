@@ -12,6 +12,7 @@ and deliberately out of scope.
 """
 import json
 import re
+import time
 
 import requests
 
@@ -19,7 +20,9 @@ BASE = "https://agendamiento.dian.gov.co"
 RUTA_RECURSOS = "Recursos/CitasDIAN/"
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")
-TIMEOUT = 30
+# DIAN gets very slow when slots open (15-35 s per request observed on 2026-10-20),
+# so be patient: a slow answer is a signal, not a failure.
+TIMEOUT = 90
 
 STEP_COLAS = "manejadorEncontroColas"
 STEP_NO_COLAS = "manejadorNoEncontroColas"
@@ -37,6 +40,10 @@ class SchemaChanged(DianError):
     """The response no longer looks like what we know. Needs a human."""
 
 
+class TimedOut(DianError):
+    """DIAN did not answer within TIMEOUT. Often means it is overloaded by an opening."""
+
+
 class DianClient:
     def __init__(self, session=None):
         self.s = session or requests.Session()
@@ -44,6 +51,8 @@ class DianClient:
         self._token = None
         self._config = None
         self.requests_made = 0
+        # Seconds the last ValidadorValidar POST took (the availability lookup itself).
+        self.last_latency = None
 
     # --- transport ---------------------------------------------------------
 
@@ -58,6 +67,8 @@ class DianClient:
     def _fetch_token(self):
         try:
             resp = self.s.get(f"{BASE}/?recurso=CitasDIAN", timeout=TIMEOUT)
+        except requests.Timeout as e:
+            raise TimedOut(f"GET page: no answer in {TIMEOUT} s") from e
         except requests.RequestException as e:
             raise DianError(f"GET page: {e}") from e
         self.requests_made += 1
@@ -81,11 +92,16 @@ class DianClient:
             "RequestVerificationToken": token,
             "g-recaptcha-response": "",
         }
+        started = time.monotonic()
         try:
             resp = self.s.post(f"{BASE}/Player.aspx/{method}", headers=headers,
                                data=json.dumps(payload), timeout=TIMEOUT)
+        except requests.Timeout as e:
+            raise TimedOut(f"{method}: no answer in {TIMEOUT} s") from e
         except requests.RequestException as e:
             raise DianError(f"{method}: {e}") from e
+        if method == "ValidadorValidar":
+            self.last_latency = time.monotonic() - started
         self.requests_made += 1
         self._check_status(resp, method)
         self._token = resp.headers.get("X-token") or None

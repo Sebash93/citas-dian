@@ -119,6 +119,19 @@ def opening(settings, matches, when, first=True):
     )
 
 
+def possible(settings, seconds, when, timed_out=False):
+    how = (f"no respondió en {seconds:.0f} s" if timed_out
+           else f"está respondiendo muy lento ({seconds:.0f} s)")
+    return Message(
+        text=(f"🟡 POSIBLE CITA EN LA DIAN\n\nLa DIAN {how}. Suele pasar cuando abren cupos, "
+              "pero todavía no veo Medellín en la lista.\n\nRevisa ahora:\n"
+              "Agendar cita → Persona Natural → Videoatención → Devoluciones → Medellín\n"
+              f"Visto: {when:%a %d %b %H:%M:%S} (Bogotá)"),
+        urgent=True,
+        button=("Revisar agendamiento", settings.booking_url),
+    )
+
+
 def broken(error, failures):
     return Message(f"⚠️ Bot DIAN: {failures} revisiones seguidas fallaron.\n"
                    f"Último error: {error}\nMientras tanto NO estoy vigilando bien.")
