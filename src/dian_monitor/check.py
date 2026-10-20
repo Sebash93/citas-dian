@@ -1,6 +1,5 @@
 """Turn a raw 'colas' response into a verdict for the target city."""
 import html
-import json
 import re
 import unicodedata
 from dataclasses import dataclass, field
@@ -38,12 +37,19 @@ def _items(data):
     return groups
 
 
-def evaluate(data, city):
-    """Classify one ValidadorValidar(colas) response.
+def city_of(name):
+    """City prefix of a tramite name, e.g. '“Cali - Solicitud de devolución…”' -> 'cali'.
 
-    The whole item (not only its Nombre) is searched for the city, so a match still
-    works if DIAN moves the city into another field.
+    Only the name is used: other fields (Requisitos) mention several cities, e.g.
+    "las direcciones seccionales de Bogotá, Bucaramanga, Cali y Medellín".
     """
+    text = normalize(name).strip(" \"'“”‘’«».")
+    head, sep, _ = text.partition(" - ")
+    return head.strip(" \"'“”‘’«»") if sep else None
+
+
+def evaluate(data, city):
+    """Classify one ValidadorValidar(colas) response."""
     error = data.get("ErrorString")
     step = data.get("DetalleAdicional")
 
@@ -61,7 +67,11 @@ def evaluate(data, city):
     target = normalize(city)
     matches, others = [], []
     for item in items:
-        name = clean(item.get("Nombre") or json.dumps(item, ensure_ascii=False))
-        haystack = normalize(json.dumps(item, ensure_ascii=False))
-        (matches if target in haystack else others).append(name)
+        name = clean(item.get("Nombre") or "")
+        if not name:
+            raise SchemaChanged("found an item without Nombre")
+        prefix = city_of(name)
+        # Unrecognized format: fall back to the name only, never the whole item.
+        hit = prefix == target if prefix is not None else target in normalize(name)
+        (matches if hit else others).append(name)
     return CheckResult(FOUND if matches else NONE, matches, others, raw=data)

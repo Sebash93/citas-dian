@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from dian_monitor import cadence  # noqa: E402
-from dian_monitor.check import FOUND, NONE, evaluate  # noqa: E402
+from dian_monitor.check import FOUND, NONE, city_of, evaluate  # noqa: E402
 from dian_monitor.client import Blocked, DianClient, DianError, SchemaChanged  # noqa: E402
 from dian_monitor.config import Settings  # noqa: E402
 from dian_monitor.monitor import Monitor  # noqa: E402
@@ -122,17 +122,29 @@ class EvaluateTest(unittest.TestCase):
     def test_nothing_open(self):
         self.assertEqual(evaluate(colas("colas_none.json"), "medellin").status, NONE)
 
-    def test_medellin_open_matches_with_accent_entity(self):
+    def test_medellin_open(self):
         result = evaluate(colas("colas_medellin.json"), "medellin")
         self.assertEqual(result.status, FOUND)
         self.assertEqual(len(result.matches), 1)
-        self.assertIn("Medellín", result.matches[0])
+        self.assertTrue(result.matches[0].startswith("“Medellín -"))
         self.assertEqual(len(result.other_cities), 1)
 
-    def test_other_city_only_is_not_an_alert(self):
-        result = evaluate(colas("colas_bogota_only.json"), "medellin")
+    def test_cali_whose_requisitos_mention_medellin_is_not_an_alert(self):
+        # Real response (2026-10-20): Requisitos lists "Bogotá, Bucaramanga, Cali y Medellín".
+        result = evaluate(colas("colas_cali_real.json"), "medellin")
         self.assertEqual(result.status, NONE)
         self.assertEqual(len(result.other_cities), 1)
+
+    def test_city_prefix(self):
+        self.assertEqual(city_of("“Cali - Solicitud de devolución…”"), "cali")
+        self.assertEqual(city_of("Medell&iacute;n - Solicitud"), "medellin")
+        self.assertEqual(city_of('"Bogotá D.C. - Solicitud"'), "bogota d.c.")
+        self.assertIsNone(city_of("Solicitud de devolución sin ciudad"))
+        # Another city whose name merely contains the target must not match.
+        result = evaluate({"Encontrado": True, "DetalleAdicional": "manejadorEncontroColas",
+                           "ObjetosEncontrados": [[{"Nombre": "“Medellín Norte - X”"}]]},
+                          "medellin")
+        self.assertEqual(result.status, NONE)
 
     def test_app_error_is_schema_change(self):
         with self.assertRaises(SchemaChanged):
@@ -215,7 +227,7 @@ class MonitorTest(unittest.TestCase):
         self.assertIsNotNone(mon.state["history"][0]["closed"])
 
     def test_other_city_is_silent(self):
-        mon, notifier, _ = make_monitor([colas("colas_bogota_only.json")], heartbeat_hour=23)
+        mon, notifier, _ = make_monitor([colas("colas_cali_real.json")], heartbeat_hour=23)
         mon.poll()
         self.assertEqual(notifier.sent, [])
 

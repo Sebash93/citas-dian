@@ -1,0 +1,21 @@
+{
+ "Fuente": null,
+ "Encontrado": true,
+ "DetalleAdicional": "manejadorEncontroColas",
+ "ObjetosEncontrados": [
+  [
+   {
+    "IdEspecialidad": 976,
+    "CodigoEspecialidad": 0,
+    "Nombre": "“Cali - Solicitud de devolución y/o compensación Vehículos eléctricos o Híbridos persona natural”",
+    "Requisitos": "<p class=\"MsoNormal\" style=\"text-align: center;\"><span style=\"font-weight: bold;\">Solicitud de devoluci&#243;n y/o compensaci&#243;n Veh&#237;culos el&#233;ctricos o H&#237;bridos persona natural</span><br />\n</p>\n<p class=\"MsoNormal\" style=\"text-align: justify;\">Estimado contribuyente:<o:p /></p>\n<p class=\"MsoNormal\" style=\"text-align: justify;\">Para las solicitudes de devoluci&#243;n y/o compensaci&#243;n que se radican de manera manual en las direcciones seccionales de Bogot&#225;, Bucaramanga, Cali y Medell&#237;n, es necesario agendar una cita.</p>"
+   }
+  ]
+ ],
+ "Recurso": "",
+ "MensajeAdicional": null,
+ "ErrorString": null,
+ "Observacion": "",
+ "TotalObjetosEncontrados": 1,
+ "RespuestaInterna": null
+}
