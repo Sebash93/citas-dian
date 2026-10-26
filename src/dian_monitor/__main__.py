@@ -1,6 +1,9 @@
-"""python -m dian_monitor [--once] [--budget SECONDS] [--telegram-chats | --telegram-test]"""
+"""python -m dian_monitor [--once] [--budget SECONDS] [--telegram-chats | --telegram-test | --report]"""
 import argparse
 import os
+from datetime import timedelta
+
+from . import cadence, events
 
 from .config import Settings
 from .monitor import Monitor, log
@@ -17,7 +20,16 @@ def main(argv=None):
                         help="list chat ids that messaged the bot (needs TELEGRAM_BOT_TOKEN)")
     parser.add_argument("--telegram-test", action="store_true",
                         help="send a test message to TELEGRAM_CHAT_ID")
+    parser.add_argument("--report", nargs="?", const="", metavar="EVENTS_FILE",
+                        help="summarize the event log (default: DIAN_EVENTS_FILE) and exit")
+    parser.add_argument("--days", type=int, default=None, help="with --report: only the last N days")
     args = parser.parse_args(argv)
+
+    if args.report is not None:
+        path = args.report or Settings.from_env().events_file
+        since = cadence.now_bogota() - timedelta(days=args.days) if args.days else None
+        print(events.report(events.read(path), since=since))
+        return 0
 
     if args.telegram_chats:
         token = os.environ["TELEGRAM_BOT_TOKEN"].strip()

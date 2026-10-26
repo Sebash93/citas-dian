@@ -15,6 +15,7 @@ class Message:
     text: str
     urgent: bool = False
     button: tuple = None  # (label, url)
+    private: bool = False  # button URL is a secret (live-browser link): keep it out of logs
 
 
 class ConsoleNotifier:
@@ -26,8 +27,13 @@ class ConsoleNotifier:
         bar = "!" * 60 if message.urgent else "-" * 60
         print(f"{bar}\n{message.text}", flush=True)
         if message.button:
-            print(f"[{message.button[0]}] {message.button[1]}", flush=True)
+            url = "(link sent only to Telegram)" if message.private else message.button[1]
+            print(f"[{message.button[0]}] {url}", flush=True)
         print(bar, flush=True)
+        return True
+
+    def send_photo(self, path, caption=""):
+        print(f"[photo] {path} {caption}", flush=True)
         return True
 
 
@@ -70,6 +76,22 @@ class TelegramNotifier:
                         ok = False
                     else:
                         time.sleep(2 * attempt)
+        return ok
+
+    def send_photo(self, path, caption=""):
+        """Screenshots go only to the chats: they may show personal data."""
+        ok = True
+        for chat_id in self.chat_ids:
+            try:
+                with open(path, "rb") as f:
+                    resp = self.s.post(self.API.format(token=self.token, method="sendPhoto"),
+                                       data={"chat_id": chat_id, "caption": caption[:1000]},
+                                       files={"photo": f}, timeout=60)
+                if not resp.json().get("ok"):
+                    raise RuntimeError(f"Telegram sendPhoto: {resp.status_code}")
+            except (OSError, requests.RequestException, ValueError, RuntimeError) as e:
+                print(f"Telegram photo to {chat_id} failed: {e}", flush=True)
+                ok = False
         return ok
 
 

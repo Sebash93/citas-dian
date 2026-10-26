@@ -22,7 +22,10 @@ permissions:
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # ~19 min of polling, plus up to ~35 min if a booker is mid-attempt when the budget ends.
+    timeout-minutes: 60
+    env:
+      BOOKER_READY_FILE: /tmp/booker-ready
     steps:
       - uses: actions/checkout@v4
 
@@ -31,7 +34,12 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - run: pip install -r requirements.txt
+      - run: pip install -r ${{ vars.DIAN_BOOKER == '1' && 'requirements-booker.txt' || 'requirements.txt' }}
+
+      # Background install so polling starts at once; the booker waits for $BOOKER_READY_FILE.
+      - name: Prepare live browser (background)
+        if: vars.DIAN_BOOKER == '1'
+        run: nohup .github/scripts/booker-setup.sh > /tmp/booker-setup.log 2>&1 &
 
       - name: Restore state
         uses: actions/cache/restore@v4
@@ -45,6 +53,13 @@ jobs:
           PYTHONPATH: src
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DIAN_BOOKER: ${{ vars.DIAN_BOOKER }}
+          BOOKER_DRY_RUN: ${{ vars.BOOKER_DRY_RUN }}
+          BOOKER_DOC_TYPE: ${{ secrets.BOOKER_DOC_TYPE }}
+          BOOKER_DOC_NUMBER: ${{ secrets.BOOKER_DOC_NUMBER }}
+          BOOKER_FULL_NAME: ${{ secrets.BOOKER_FULL_NAME }}
+          BOOKER_EMAIL: ${{ secrets.BOOKER_EMAIL }}
+          BOOKER_PHONE: ${{ secrets.BOOKER_PHONE }}
         run: python -m dian_monitor ${{ inputs.once && '--once' || '' }}
 
       - name: Save state
@@ -53,6 +68,17 @@ jobs:
         with:
           path: state
           key: dian-state-${{ github.run_id }}-${{ github.run_attempt }}
+
+      # The whole rolling log (months), so only the newest artifact is ever needed.
+      # No personal data in it: see src/dian_monitor/events.py.
+      - name: Upload event log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: events-${{ github.run_id }}
+          path: state/events.jsonl
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Upload raw responses
         if: always()

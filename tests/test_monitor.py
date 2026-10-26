@@ -112,7 +112,8 @@ FRIDAY = datetime(2026, 10, 23, 9, 30, tzinfo=cadence.BOGOTA)
 def make_monitor(items, start=FRIDAY, latencies=None, **overrides):
     tmp = tempfile.mkdtemp()
     settings = replace(Settings(), state_file=os.path.join(tmp, "state.json"),
-                       captures_dir=os.path.join(tmp, "captures"), **overrides)
+                       captures_dir=os.path.join(tmp, "captures"),
+                       events_file=os.path.join(tmp, "events.jsonl"), **overrides)
     clock = Clock(start)
     notifier = ConsoleNotifier()
     mon = Monitor(settings, notifier, client=FakeClient(items, latencies), clock=clock,

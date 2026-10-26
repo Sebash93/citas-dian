@@ -2,10 +2,13 @@
 import json
 import os
 import random
+import subprocess
+import sys
 import time
 from datetime import datetime, timedelta
 
 from . import cadence, notify
+from .events import EventLog, percentile
 from . import state as state_mod
 from .check import FOUND, evaluate
 from .client import TIMEOUT as TIMEOUT_SECONDS
@@ -26,16 +29,47 @@ def _parse(iso):
     return datetime.fromisoformat(iso) if iso else None
 
 
+def already_booked(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return bool(json.load(f).get("booked"))
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+class BookerProcess:
+    """Runs `python -m dian_booker --trigger <why>` beside the monitor, one at a time."""
+
+    def __init__(self):
+        self.proc = None
+
+    def running(self):
+        return self.proc is not None and self.proc.poll() is None
+
+    def start(self, trigger):
+        if self.running():
+            return False
+        self.proc = subprocess.Popen([sys.executable, "-m", "dian_booker", "--trigger", trigger])
+        return True
+
+    def wait(self):
+        if self.proc is not None:
+            self.proc.wait()
+
+
 class Monitor:
     def __init__(self, settings, notifier, client=None, clock=cadence.now_bogota,
-                 sleep=time.sleep, rand=random.uniform):
+                 sleep=time.sleep, rand=random.uniform, booker=None):
         self.settings = settings
         self.notifier = notifier
         self.client = client or DianClient()
         self.clock = clock
         self.sleep = sleep
         self.rand = rand
+        self.booker = booker or (BookerProcess() if settings.booker else None)
         self.state = state_mod.load(settings.state_file)
+        self.events = EventLog(settings.events_file, clock, "monitor")
+        self.stats = {"checks": 0, "errors": 0, "latencies": [], "statuses": {}}
 
     # --- bookkeeping -------------------------------------------------------
 
@@ -65,6 +99,13 @@ class Monitor:
             json.dump(data, f, ensure_ascii=False, indent=2)
         log(f"Saved raw response to {path}")
 
+    def _maybe_book(self, trigger):
+        if self.booker is None or already_booked(self.settings.booking_file):
+            return
+        if self.booker.start(trigger):
+            log(f"Booker started ({trigger}).")
+            self.events.emit("booker_launch", trigger=trigger)
+
     # --- outcomes ----------------------------------------------------------
 
     def _on_success(self, now):
@@ -78,7 +119,10 @@ class Monitor:
         self.state["errors_today"] += 1
         self.state["consecutive_failures"] += 1
         failures = self.state["consecutive_failures"]
+        self.stats["errors"] += 1
         log(f"Check failed ({failures} in a row): {error}")
+        self.events.emit("failure", error=type(error).__name__, message=str(error)[:300],
+                         streak=failures)
         if failures >= self.settings.failures_before_alert and not self.state["failure_alert_sent"]:
             self.notifier.send(notify.broken(error, failures))
             self.state["failure_alert_sent"] = True
@@ -92,6 +136,8 @@ class Monitor:
         until = now + timedelta(minutes=pause)
         self.state["blocked_until"] = _iso(until)
         log(f"Blocked ({blocks} in a row): {error}. Pausing {pause} min.")
+        self.stats["errors"] += 1
+        self.events.emit("blocked", message=str(error)[:300], blocks=blocks, pause_min=pause)
         if blocks >= 3 and not self.state["failure_alert_sent"]:
             self.notifier.send(notify.blocked(blocks, until))
             self.state["failure_alert_sent"] = True
@@ -102,6 +148,7 @@ class Monitor:
         st["slow_events"].append({"at": _iso(now), "seconds": round(seconds, 1),
                                   "timed_out": timed_out})
         log(f"DIAN slow: {seconds:.1f} s{' (timed out)' if timed_out else ''}")
+        self.events.emit("slow", seconds=round(seconds, 1), timed_out=timed_out)
         if st["open_since"]:
             return  # a confirmed Medellín alert is already out
         last = _parse(st["last_possible_at"])
@@ -109,12 +156,17 @@ class Monitor:
             return
         self.notifier.send(notify.possible(self.settings, seconds, now, timed_out))
         st["last_possible_at"] = _iso(now)
+        if self.settings.booker_on_possible:
+            self._maybe_book("posible")
 
     def _on_result(self, now, result):
         st = self.state
         if result.status != FOUND:
             if st["open_since"]:
                 log(f"Medellín opening closed (open since {st['open_since']}).")
+                opened = _parse(st["open_since"])
+                self.events.emit("closed", opened=st["open_since"],
+                                 minutes=round((now - opened).total_seconds() / 60, 1))
                 for entry in reversed(st["history"]):
                     if entry["closed"] is None:
                         entry["closed"] = _iso(now)
@@ -122,6 +174,7 @@ class Monitor:
                 st.update(open_since=None, open_matches=[], alerts_for_opening=0)
             if result.other_cities and result.other_cities != st.get("last_other_cities"):
                 log(f"Open elsewhere (not alerting): {result.other_cities}")
+                self.events.emit("other_city", names=result.other_cities)
                 self._capture(now, result.raw, "other-city")
             st["last_other_cities"] = result.other_cities
             return
@@ -132,6 +185,8 @@ class Monitor:
                 st["open_since"] = _iso(now)
                 st["history"].append({"opened": _iso(now), "closed": None,
                                       "matches": result.matches})
+                self.events.emit("opening", at=_iso(now), matches=result.matches,
+                                 latency=self.client.last_latency)
             st.update(open_matches=result.matches, alerts_for_opening=0)
             self._capture(now, result.raw, "medellin")
             first = True
@@ -144,6 +199,7 @@ class Monitor:
         self.notifier.send(notify.opening(self.settings, result.matches, now, first=first))
         st["alerts_for_opening"] += 1
         st["last_alert_at"] = _iso(now)
+        self._maybe_book("found")  # no-op while one is running; retries on each re-alert
 
     # --- loop --------------------------------------------------------------
 
@@ -153,6 +209,7 @@ class Monitor:
         self._roll_day(now)
         self.state["checks_today"] += 1
         self.state["last_check_at"] = _iso(now)
+        self.stats["checks"] += 1
         s = self.settings
         try:
             result = evaluate(self.client.find_colas(s.tipo_persona, s.categoria, s.tipo_atencion),
@@ -172,6 +229,10 @@ class Monitor:
             return True
         self._on_success(now)
         latency = self.client.last_latency
+        if latency is not None:
+            self.stats["latencies"].append(latency)
+        statuses = self.stats["statuses"]
+        statuses[result.status] = statuses.get(result.status, 0) + 1
         log(f"Check: {result.status} {result.matches or ''} "
             f"({latency or 0:.1f} s, requests so far: {self.client.requests_made})")
         self._on_result(now, result)
@@ -189,14 +250,33 @@ class Monitor:
         blocked_until = _parse(self.state["blocked_until"])
         if blocked_until and start < blocked_until and not once:
             log(f"Paused after a block until {blocked_until:%H:%M}. Skipping this run.")
+            self.events.emit("run", marker="MONITOR_PAUSED", checks=0, errors=0)
             return "MONITOR_PAUSED"
 
         self._maybe_heartbeat(start)
         self._save()
         if once:
             self.poll()
-            return self._marker()
+        else:
+            self._loop(deadline)
+        if self.booker is not None and self.booker.running():
+            log("Waiting for the booker to finish before ending the run.")
+            self.booker.wait()
+        marker = self._marker()
+        self._emit_run(marker, start)
+        return marker
 
+    def _emit_run(self, marker, start):
+        lat = self.stats["latencies"]
+        self.events.emit("run", marker=marker, checks=self.stats["checks"],
+                         errors=self.stats["errors"], statuses=self.stats["statuses"],
+                         latency_median=percentile(lat, 0.5) and round(percentile(lat, 0.5), 2),
+                         latency_max=round(max(lat), 2) if lat else None,
+                         minutes=round((self.clock() - start).total_seconds() / 60, 1))
+        self.stats = {"checks": 0, "errors": 0, "latencies": [], "statuses": {}}
+        self.events.trim()  # the booker (the only other writer) has finished by now
+
+    def _loop(self, deadline):
         self.sleep(self.rand(0, 10))  # avoid hitting the server on the exact same second
         while True:
             now = self.clock()
@@ -209,7 +289,6 @@ class Monitor:
                 self.sleep((due - now).total_seconds())
             if not self.poll():
                 break
-        return self._marker()
 
     def _marker(self):
         if self.state["blocks"]:

@@ -1,0 +1,68 @@
+name: Booker test run
+
+# Runs the booker by hand on any open category (e.g. Presencial / RUT / Medellín) to check
+# the live link, the wizard and timings. Dry run by default: it never clicks Agendar.
+on:
+  workflow_dispatch:
+    inputs:
+      tipo_atencion:
+        description: "1 = Presencial, 2 = Videoatención"
+        default: "1"
+      categoria:
+        description: "7 = RUT, 13 = Devoluciones (see config.py)"
+        default: "7"
+      service:
+        description: "Tramite substring when names carry no city"
+        default: "persona natural"
+      dry_run:
+        description: "Stop before Agendar"
+        type: boolean
+        default: true
+
+concurrency:
+  group: dian-booker-test
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  book:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      BOOKER_READY_FILE: /tmp/booker-ready
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements-booker.txt
+      - run: .github/scripts/booker-setup.sh
+      - name: Book
+        env:
+          PYTHONPATH: src
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DIAN_TIPO_ATENCION: ${{ inputs.tipo_atencion }}
+          DIAN_CATEGORIA: ${{ inputs.categoria }}
+          DIAN_BOOKING_FILE: /tmp/booking-test.json
+          BOOKER_DOC_TYPE: ${{ secrets.BOOKER_DOC_TYPE }}
+          BOOKER_DOC_NUMBER: ${{ secrets.BOOKER_DOC_NUMBER }}
+          BOOKER_FULL_NAME: ${{ secrets.BOOKER_FULL_NAME }}
+          BOOKER_EMAIL: ${{ secrets.BOOKER_EMAIL }}
+          BOOKER_PHONE: ${{ secrets.BOOKER_PHONE }}
+          BOOKER_SERVICE: ${{ inputs.service }}
+          BOOKER_DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+          BOOKER_WAIT_MINUTES: "3"
+          DIAN_EVENTS_FILE: events/booker-test.jsonl
+        run: python -m dian_booker --trigger found
+      - name: Upload event log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: booker-test-events-${{ github.run_id }}
+          path: events/booker-test.jsonl
+          if-no-files-found: ignore
+          retention-days: 30

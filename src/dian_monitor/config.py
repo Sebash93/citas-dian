@@ -8,6 +8,10 @@ def _env(name, default):
     return value if value else default
 
 
+def _flag(name, default):
+    return _env(name, "1" if default else "0").lower() in ("1", "true", "yes")
+
+
 @dataclass(frozen=True)
 class Settings:
     # Codes used by the DIAN app itself:
@@ -18,7 +22,7 @@ class Settings:
     tipo_persona: str = "1"
     tipo_atencion: str = "2"
     categoria: str = "13"
-    # Accent/case-insensitive substring matched against each available tramite.
+    # Accent/case-insensitive city matched against the "<City> - ..." prefix of each tramite.
     city: str = "medellin"
 
     state_file: str = "state/state.json"
@@ -38,6 +42,14 @@ class Settings:
     # Bogota hour after which the first run of the day sends the "still alive" summary.
     heartbeat_hour: int = 8
     booking_url: str = "https://agendamiento.dian.gov.co/?recurso=CitasDIAN"
+    # Start `python -m dian_booker` on an opening (and, optionally, on a "posible" alert).
+    # The booker stops at the reCAPTCHA and sends a live-browser link for a human to solve it.
+    booker: bool = False
+    booker_on_possible: bool = True
+    # Written by the booker after a confirmed booking; while it says booked, no more bookers.
+    booking_file: str = "state/booking.json"
+    # Structured event log (JSONL) for reports; kept with the state, uploaded after each run.
+    events_file: str = "state/events.jsonl"
 
     @classmethod
     def from_env(cls):
@@ -56,6 +68,10 @@ class Settings:
             possible_cooldown_seconds=int(_env("DIAN_POSSIBLE_COOLDOWN_SECONDS",
                                                cls.possible_cooldown_seconds)),
             heartbeat_hour=int(_env("DIAN_HEARTBEAT_HOUR", cls.heartbeat_hour)),
+            booker=_flag("DIAN_BOOKER", cls.booker),
+            booker_on_possible=_flag("DIAN_BOOKER_ON_POSIBLE", cls.booker_on_possible),
+            booking_file=_env("DIAN_BOOKING_FILE", cls.booking_file),
+            events_file=_env("DIAN_EVENTS_FILE", cls.events_file),
         )
 
     @property
