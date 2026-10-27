@@ -70,7 +70,8 @@ nonstop on Render. Render redeploys it on pushes that touch `src/dian_monitor/`,
    `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `GITHUB_DISPATCH_TOKEN`, `DIAN_HEALTHCHECK_URL`
    and `DIAN_BOOKER` (`1` to start the booker on openings, `0` for alerts only).
 4. Watch the logs for a few `Check: NONE` lines. That confirms DIAN accepts Render's IP.
-5. Turn GitHub's monitor schedule off: `gh variable set DIAN_GITHUB_MONITOR --body 0`.
+5. GitHub's fallback monitor stays off unless you turn it on with
+   `gh variable set DIAN_GITHUB_MONITOR --body 1`.
 
 The monitor pings the health check after each check and at least every 5 minutes while it
 waits. If the process or Render goes down, healthchecks.io alerts you. If it crashes on an
@@ -86,7 +87,7 @@ Reports on Render (Shell tab):
 - `monitor.yml` is the fallback monitor. It starts every 5 minutes and each run polls for about
   19 minutes, with a concurrency group queuing the next one. State is kept in the Actions
   cache, and raw responses for openings are uploaded as `captures-*` artifacts. Its schedule
-  runs unless `DIAN_GITHUB_MONITOR=0`. Manual runs (**Actions → Monitor citas DIAN → Run
+  only polls when the repo variable `DIAN_GITHUB_MONITOR=1`; otherwise runs are skipped. Manual runs (**Actions → Monitor citas DIAN → Run
   workflow**) always work.
 - `keepalive.yml` re-enables the schedule twice a month (GitHub disables it after 60 days
   without repository activity).

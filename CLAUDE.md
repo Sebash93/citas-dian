@@ -88,7 +88,7 @@ The monitor and booker deploy separately from this one repo:
   - `health.py` pings `DIAN_HEALTHCHECK_URL` (healthchecks.io) after each check and during waits, which `_wait()` slices into ≤5 min. Never log that URL.
 - **GitHub Actions (booker and fallback):**
   - `booker.yml` is dispatched by the Render monitor (input `trigger`).
-  - `monitor.yml` runs on cron every 5 minutes unless the repo variable `DIAN_GITHUB_MONITOR=0`. Each run polls for about 19 minutes (`run_budget_seconds=1140`). The `dian-monitor` concurrency group queues runs so coverage stays continuous despite cron delays.
+  - `monitor.yml` runs on cron every 5 minutes but only polls when the repo variable `DIAN_GITHUB_MONITOR=1` (compare with `'1'`: an unset variable equals `'0'` in Actions expressions). Each run polls for about 19 minutes (`run_budget_seconds=1140`). The `dian-monitor` concurrency group queues runs so coverage stays continuous despite cron delays.
 - State lives in the Actions cache: it is restored by the `dian-state-` prefix and saved under a unique key on every run.
 - On GitHub, `captures/` is uploaded as `captures-<run_id>` artifacts (on Render it is `/var/data/captures`). When DIAN's response format is in doubt, check these first.
 - `keepalive.yml` re-enables the schedule twice a month.

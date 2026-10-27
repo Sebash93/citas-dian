@@ -1,9 +1,9 @@
 name: Monitor citas DIAN
 
 # Fallback for the always-on monitor on Render (render.yaml). GitHub's cron is best effort
-# and often starts only a few runs a day. Turn the schedule off once Render is live with
-#   gh variable set DIAN_GITHUB_MONITOR --body 0
-# and back on with --body 1. Manual runs always work.
+# and often starts only a few runs a day. Scheduled runs only poll when the repo variable
+# DIAN_GITHUB_MONITOR is 1 (gh variable set DIAN_GITHUB_MONITOR --body 1); otherwise they
+# are skipped. Manual runs always work.
 on:
   schedule:
     # Every 5 min, off the :00 minute (GitHub's most delayed slot). Each run polls for
@@ -25,7 +25,8 @@ permissions:
 
 jobs:
   monitor:
-    if: github.event_name == 'workflow_dispatch' || vars.DIAN_GITHUB_MONITOR != '0'
+    # Compare with '1': an unset variable equals '0' in GitHub's loose comparison.
+    if: github.event_name == 'workflow_dispatch' || vars.DIAN_GITHUB_MONITOR == '1'
     runs-on: ubuntu-latest
     # ~19 min of polling, plus up to ~35 min if a booker is mid-attempt when the budget ends.
     timeout-minutes: 60
