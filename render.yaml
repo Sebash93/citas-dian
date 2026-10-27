@@ -1,0 +1,49 @@
+# Render Blueprint: the always-on monitor (src/dian_monitor). The booker is not deployed
+# here; the monitor starts it on GitHub Actions (.github/workflows/booker.yml).
+# Deploy: Render dashboard → New → Blueprint → this repo. Secrets (sync: false) are asked for
+# once in the dashboard and never stored in the repo.
+services:
+  - type: worker
+    name: dian-monitor
+    runtime: python
+    region: virginia        # closest Render region to Colombia
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m dian_monitor --forever
+    # Redeploy only when the monitor changes, not on booker or workflow edits.
+    buildFilter:
+      paths:
+        - src/dian_monitor/**
+        - requirements.txt
+        - render.yaml
+    disk:
+      name: dian-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.8"
+      - key: PYTHONPATH
+        value: src
+      - key: DIAN_STATE_FILE
+        value: /var/data/state/state.json
+      - key: DIAN_EVENTS_FILE
+        value: /var/data/state/events.jsonl
+      - key: DIAN_BOOKING_FILE
+        value: /var/data/state/booking.json
+      - key: DIAN_CAPTURES_DIR
+        value: /var/data/captures
+      # Booker on GitHub: 1 = start booker.yml on openings (needs GITHUB_DISPATCH_TOKEN), 0 = off.
+      # Asked in the dashboard (a fixed value here would overwrite dashboard edits on sync).
+      - key: DIAN_BOOKER
+        sync: false
+      - key: DIAN_BOOKER_REPO
+        value: Sebash93/citas-dian
+      - key: GITHUB_DISPATCH_TOKEN
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: DIAN_HEALTHCHECK_URL
+        sync: false

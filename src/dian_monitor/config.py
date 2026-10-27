@@ -29,6 +29,7 @@ class Settings:
     captures_dir: str = "captures"
     # Seconds one invocation keeps polling. The workflow is scheduled every 5 min
     # with a concurrency group, so a long budget bridges GitHub's cron delays.
+    # With --forever (Render) it is the length of each run summary in the event log.
     run_budget_seconds: int = 1140
     # While a slot stays open, repeat the alert this often, at most this many times.
     realert_seconds: int = 300
@@ -46,10 +47,16 @@ class Settings:
     # The booker stops at the reCAPTCHA and sends a live-browser link for a human to solve it.
     booker: bool = False
     booker_on_possible: bool = True
+    # "owner/repo": start the booker as a GitHub Actions run (booker.yml) instead of a local
+    # process. Used when the monitor runs on Render; needs GITHUB_DISPATCH_TOKEN.
+    booker_repo: str = ""
     # Written by the booker after a confirmed booking; while it says booked, no more bookers.
     booking_file: str = "state/booking.json"
     # Structured event log (JSONL) for reports; kept with the state, uploaded after each run.
     events_file: str = "state/events.jsonl"
+    # Dead-man's switch (e.g. https://hc-ping.com/<uuid>): pinged while the monitor is alive.
+    # It contains a secret key, so it is never logged.
+    healthcheck_url: str = ""
 
     @classmethod
     def from_env(cls):
@@ -70,8 +77,10 @@ class Settings:
             heartbeat_hour=int(_env("DIAN_HEARTBEAT_HOUR", cls.heartbeat_hour)),
             booker=_flag("DIAN_BOOKER", cls.booker),
             booker_on_possible=_flag("DIAN_BOOKER_ON_POSIBLE", cls.booker_on_possible),
+            booker_repo=_env("DIAN_BOOKER_REPO", cls.booker_repo),
             booking_file=_env("DIAN_BOOKING_FILE", cls.booking_file),
             events_file=_env("DIAN_EVENTS_FILE", cls.events_file),
+            healthcheck_url=_env("DIAN_HEALTHCHECK_URL", cls.healthcheck_url),
         )
 
     @property

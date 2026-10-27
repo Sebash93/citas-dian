@@ -1,0 +1,83 @@
+name: Booker
+
+# Started by the monitor on Render (GitHub API, workflow_dispatch) when Medellín opens or
+# DIAN slows down. Drives the wizard to the reCAPTCHA and sends the live-browser link.
+# After a real booking it uploads an empty `booking-booked` artifact, which stops the
+# monitor from starting more bookers. To test by hand use booker-test.yml instead.
+on:
+  workflow_dispatch:
+    inputs:
+      trigger:
+        description: "found: send the link at once; posible: only when Medellín appears"
+        type: choice
+        options: [found, posible]
+        default: found
+
+concurrency:
+  group: dian-booker
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  book:
+    runs-on: ubuntu-latest
+    # Up to 12 min waiting for Medellín, 10 for the captcha, 10 holding the browser open.
+    timeout-minutes: 45
+    env:
+      BOOKER_READY_FILE: /tmp/booker-ready
+      DIAN_BOOKING_FILE: booked/booking.json
+      DIAN_EVENTS_FILE: events/booker.jsonl
+    steps:
+      - uses: actions/checkout@v4
+
+      # Background install while Python and Playwright install; the booker waits for it.
+      - name: Prepare live browser (background)
+        run: nohup .github/scripts/booker-setup.sh > /tmp/booker-setup.log 2>&1 &
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements-booker.txt
+
+      - name: Book
+        env:
+          PYTHONPATH: src
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          BOOKER_DRY_RUN: ${{ vars.BOOKER_DRY_RUN }}
+          BOOKER_DOC_TYPE: ${{ secrets.BOOKER_DOC_TYPE }}
+          BOOKER_DOC_NUMBER: ${{ secrets.BOOKER_DOC_NUMBER }}
+          BOOKER_FULL_NAME: ${{ secrets.BOOKER_FULL_NAME }}
+          BOOKER_EMAIL: ${{ secrets.BOOKER_EMAIL }}
+          BOOKER_PHONE: ${{ secrets.BOOKER_PHONE }}
+        run: python -m dian_booker --trigger ${{ inputs.trigger }}
+
+      # The marker carries no personal data: booking.json (date, sede) is replaced by a timestamp.
+      - name: Mark booked
+        if: always()
+        run: |
+          if [ -f "$DIAN_BOOKING_FILE" ]; then
+            mkdir -p marker && date -u +%FT%TZ > marker/booked.txt
+          fi
+
+      - name: Upload booked marker
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: booking-booked
+          path: marker/booked.txt
+          if-no-files-found: ignore
+          retention-days: 90
+
+      - name: Upload event log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: booker-events-${{ github.run_id }}
+          path: events/booker.jsonl
+          if-no-files-found: ignore
+          retention-days: 30

@@ -45,22 +45,60 @@ PYTHONPATH=src python3 -m dian_monitor --budget 300  # poll for 5 minutes
 python3 -m unittest discover -s tests                # tests (no network)
 ```
 
-## GitHub Actions
+## Deployment: monitor on Render, booker on GitHub
 
-- `monitor.yml` starts every 5 minutes; each run polls for about 19 minutes and a
-  concurrency group queues the next one, so coverage stays continuous even when cron is late.
-  State (deduplication, failures, history) is kept in the Actions cache, and raw responses
-  for any opening are uploaded as `captures-*` artifacts.
+The two parts live in this repo but deploy separately:
+
+| Part | Where | Deployed by | Runs |
+|---|---|---|---|
+| Monitor (`src/dian_monitor`) | Render background worker | `render.yaml` | `python -m dian_monitor --forever` |
+| Booker (`src/dian_booker`) | GitHub Actions | `.github/workflows/booker.yml` | `python -m dian_booker --trigger …`, started by the monitor |
+
+GitHub's cron is best effort and often starts only a few runs a day, so the monitor runs
+nonstop on Render. Render redeploys it on pushes that touch `src/dian_monitor/`,
+`requirements.txt` or `render.yaml`. The booker always runs the code on `main`.
+
+### Render (monitor)
+
+1. **Health check:** on [healthchecks.io](https://healthchecks.io) (free), create a check with
+   period 10 min and grace 10 min. Add your Telegram or email as its notification. Copy the
+   ping URL.
+2. **GitHub token:** github.com → Settings → Developer settings → Fine-grained tokens. Choose
+   **only this repository** and the permission **Actions: Read and write**. Copy the token.
+3. **Render:** New → **Blueprint** → pick this repo. It reads `render.yaml`: a Starter worker
+   in Virginia with a 1 GB disk for the state (about $7.25/month). When asked, paste
+   `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `GITHUB_DISPATCH_TOKEN`, `DIAN_HEALTHCHECK_URL`
+   and `DIAN_BOOKER` (`1` to start the booker on openings, `0` for alerts only).
+4. Watch the logs for a few `Check: NONE` lines. That confirms DIAN accepts Render's IP.
+5. Turn GitHub's monitor schedule off: `gh variable set DIAN_GITHUB_MONITOR --body 0`.
+
+The monitor pings the health check after each check and at least every 5 minutes while it
+waits. If the process or Render goes down, healthchecks.io alerts you. If it crashes on an
+unexpected error, it logs the error, pings `/fail` and retries a minute later. Render also
+restarts it if the process exits.
+
+Reports on Render (Shell tab):
+`python -m dian_monitor --report /var/data/state/events.jsonl --days 7`.
+
+### GitHub Actions
+
+- `booker.yml` is started by the monitor through the GitHub API (see Booker below).
+- `monitor.yml` is the fallback monitor. It starts every 5 minutes and each run polls for about
+  19 minutes, with a concurrency group queuing the next one. State is kept in the Actions
+  cache, and raw responses for openings are uploaded as `captures-*` artifacts. Its schedule
+  runs unless `DIAN_GITHUB_MONITOR=0`. Manual runs (**Actions → Monitor citas DIAN → Run
+  workflow**) always work.
 - `keepalive.yml` re-enables the schedule twice a month (GitHub disables it after 60 days
   without repository activity).
-- Run manually from **Actions → Monitor citas DIAN → Run workflow** for a single check.
 
 The repo must be public for unlimited free Actions minutes. Logs contain no personal data.
 
 ## Booker (optional)
 
-When Medellín opens (or DIAN gets slow, a "posible" alert), the monitor starts
-`python -m dian_booker` on the same runner:
+When Medellín opens (or DIAN gets slow, a "posible" alert), the monitor starts the booker.
+On Render (`DIAN_BOOKER_REPO` set), it dispatches `booker.yml` through the GitHub API; the
+run usually starts within seconds. In GitHub's fallback `monitor.yml`, it runs
+`python -m dian_booker` on the same runner. Either way:
 
 1. It sets up a phone-sized virtual screen (Xvfb → x11vnc → noVNC) behind a Cloudflare quick
    tunnel and opens Chrome on the screen.
@@ -75,8 +113,13 @@ If anything fails after the link was sent, the browser stays open 10 minutes so 
 by hand. Add more people to `TELEGRAM_CHAT_ID` (comma-separated) so that anyone you trust can
 tap the captcha.
 
+Only one booker runs at a time. After a real booking, the workflow uploads an empty
+`booking-booked` artifact, and the monitor stops starting bookers once it sees it. Delete
+that artifact if you ever need to book again.
+
 Setup:
-- Repo variable `DIAN_BOOKER=1`. Set `BOOKER_DRY_RUN=1` to stop before Agendar while testing.
+- On Render: `DIAN_BOOKER=1` and `GITHUB_DISPATCH_TOKEN`. For the GitHub fallback: repo
+  variable `DIAN_BOOKER=1`. Repo variable `BOOKER_DRY_RUN=1` stops before Agendar in both.
 - Secrets: `BOOKER_DOC_NUMBER`, `BOOKER_FULL_NAME`, `BOOKER_EMAIL`, `BOOKER_PHONE`, and
   optionally `BOOKER_DOC_TYPE` (default "Cédula de ciudadanía").
 - To test: **Actions → Booker test run** walks any open category (default: Presencial / RUT /
@@ -91,14 +134,15 @@ only to Telegram.
 
 ## Event log and reports
 
-The monitor and the booker append JSON lines to `state/events.jsonl`, which persists with
-the state. They write:
+The monitor and the booker append JSON lines to `state/events.jsonl` (on Render,
+`/var/data/state/events.jsonl`), which persists with the state. A booker started from Render
+writes its own log, uploaded as `booker-events-<run_id>`. They write:
 - one summary per run: checks, failures, slowest answer, and how the run ended;
 - every opening and closing, failure, block, slow DIAN answer, and opening in another city;
 - for each booker attempt: when each stage was reached, how long each DIAN wizard step took,
   how long the captcha waited, and the result.
 
-Every run uploads the whole log as an `events-<run_id>` artifact. To read it:
+On GitHub, every monitor run uploads the whole log as an `events-<run_id>` artifact. To read it:
 
 ```bash
 scripts/report.sh 7     # newest log from GitHub, last 7 days (needs gh)
@@ -112,4 +156,5 @@ your name, document, email and phone before they're written.
 
 `DIAN_CITY` (default `medellin`), `DIAN_TIPO_PERSONA`, `DIAN_TIPO_ATENCION`, `DIAN_CATEGORIA`,
 `DIAN_RUN_BUDGET_SECONDS`, `DIAN_REALERT_SECONDS`, `DIAN_MAX_REALERTS`,
-`DIAN_FAILURES_BEFORE_ALERT`, `DIAN_HEARTBEAT_HOUR`. See `src/dian_monitor/config.py`.
+`DIAN_FAILURES_BEFORE_ALERT`, `DIAN_HEARTBEAT_HOUR`, `DIAN_BOOKER`, `DIAN_BOOKER_REPO`,
+`DIAN_HEALTHCHECK_URL`. See `src/dian_monitor/config.py`.

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A watcher for DIAN appointment slots (agendamiento.dian.gov.co): Persona Natural → Videoatención → Devoluciones, **Medellín only**. It runs on GitHub Actions and alerts through Telegram. An optional booker (`dian_booker`) drives the booking wizard up to the reCAPTCHA. The user solves the captcha through a live-browser link, then the booker finishes.
+A watcher for DIAN appointment slots (agendamiento.dian.gov.co): Persona Natural → Videoatención → Devoluciones, **Medellín only**. The monitor runs nonstop on Render (`render.yaml`, fallback: GitHub Actions cron) and alerts through Telegram. The booker runs on GitHub Actions. An optional booker (`dian_booker`) drives the booking wizard up to the reCAPTCHA. The user solves the captcha through a live-browser link, then the booker finishes.
 
 Hard constraints:
 - A human always solves the reCAPTCHA. Never add captcha-solving services or audio/AI solvers, and never auto-solve the captcha in any other way.
@@ -20,6 +20,7 @@ python3 -m unittest discover -s tests                 # all tests (offline, uses
 python3 -m unittest tests.test_monitor.MonitorTest.test_realerts_are_capped   # single test
 PYTHONPATH=src python3 -m dian_monitor --once         # one live check, ignores cadence and pauses
 PYTHONPATH=src python3 -m dian_monitor --budget 300   # poll live for 5 minutes
+PYTHONPATH=src python3 -m dian_monitor --forever      # what Render runs: back-to-back runs, never exits
 PYTHONPATH=src python3 -m dian_monitor --telegram-chats   # list chat ids (needs TELEGRAM_BOT_TOKEN)
 PYTHONPATH=src python3 -m dian_monitor --telegram-test    # send a test alert
 PYTHONPATH=src python3 -m dian_monitor --report state/events.jsonl --days 7   # summarize the event log
@@ -59,7 +60,9 @@ The flow is `__main__` → `Monitor.run` → `DianClient.find_colas` → `check.
 
 ### Booker (`src/dian_booker/`)
 
-- **`monitor.py` starts the booker:** `BookerProcess` runs `python -m dian_booker --trigger found|posible` when `DIAN_BOOKER=1`. It starts on every opening alert and on "posible" alerts, runs one process at a time, and doesn't start once `state/booking.json` says booked. `run()` waits for the booker before returning.
+- **`monitor.py` starts the booker** when `DIAN_BOOKER=1`, on every opening alert and on "posible" alerts, one at a time, and not once `state/booking.json` says booked. `build_booker()` picks how:
+  - `GitHubBooker` (`remote_booker.py`, when `DIAN_BOOKER_REPO` is set, i.e. on Render) dispatches `booker.yml` through the GitHub API with `GITHUB_DISPATCH_TOKEN`. It skips the dispatch if a booker run is active or a `booking-booked` artifact exists (uploaded by the workflows after a real booking). Dispatch errors send a Telegram alert and never stop monitoring; they must never contain the token.
+  - `BookerProcess` (GitHub fallback `monitor.yml`) runs `python -m dian_booker --trigger found|posible` beside the monitor; `run()` waits for it before returning.
 - **`remote.py`:** sets up the remote screen: Xvfb at 412×900 (phone size) → x11vnc (random 8-character password) → websockify/noVNC → Cloudflare quick tunnel. The link is `novnc_url(...)`. On GitHub, `.github/scripts/booker-setup.sh` installs the packages in the background at job start and touches `BOOKER_READY_FILE` when done.
 - **`booker.py`:** launches the system Chrome as a normal (not automation-flagged) window and connects Playwright to it over CDP (`connect_over_cdp`).
   - With `--trigger found`, it sends the "prepárate" link at once. Otherwise it sends the link only when Medellín appears.
@@ -70,21 +73,27 @@ The flow is `__main__` → `Monitor.run` → `DianClient.find_colas` → `check.
 ### Event log (`events.py`)
 
 `EventLog.emit(kind, **fields)` appends to `state/events.jsonl` (`DIAN_EVENTS_FILE`). Both the monitor and the booker subprocess write to it in append mode. Only the monitor trims it, at the end of `run()`, after the booker has finished. `emit` never raises.
-- **Monitor kinds:** `run` (one per run, with counts and latency), `opening`, `closed`, `failure`, `blocked`, `slow`, `other_city`, `booker_launch`.
+- **Monitor kinds:** `run` (one per run, with counts and latency), `opening`, `closed`, `failure`, `blocked`, `slow`, `other_city`, `booker_launch`, `booker_launch_failed`, `crash`.
 - **Booker kinds:** `booker_start`, `booker_stage`, `dian_step` (timed from Playwright request events), `booker_link_sent`, `booker_end`.
 - **Reports:** `events.report()` backs `python -m dian_monitor --report [FILE] [--days N]`, and `scripts/report.sh` downloads the newest `events-<run_id>` artifact first.
 - **Privacy:** events are uploaded from a public repo, so never put personal data or the link in them. Free text from the booker goes through `Profile.scrub()`.
 
 `Monitor` takes `client`, `clock`, `sleep`, `rand` and `booker` as constructor arguments. Test helpers must point `state_file`, `events_file` and `booking_file` at a temp dir. Tests replace them with `FakeClient`/`FakeSession`, a fake `Clock` and fixtures in `tests/fixtures/`, so tests never touch the network.
 
-## Deployment (GitHub Actions)
+## Deployment
 
-- `monitor.yml` runs on cron every 5 minutes, and each run polls for about 19 minutes (`run_budget_seconds=1140`). The `dian-monitor` concurrency group queues runs so coverage stays continuous despite cron delays.
+The monitor and booker deploy separately from this one repo:
+- **Render (monitor):** `render.yaml` Blueprint, a worker running `python -m dian_monitor --forever` with a disk at `/var/data` for state, events and captures. `buildFilter` redeploys only on monitor changes. `dian_monitor` must not import `dian_booker` or Playwright, since Render installs only `requirements.txt`.
+  - `run_forever()` chains `run()`s of `run_budget_seconds` each (one `run` event per chunk), sleeps through block pauses, and on an unexpected exception logs it, emits `crash`, pings `/fail` and retries after 60 s.
+  - `health.py` pings `DIAN_HEALTHCHECK_URL` (healthchecks.io) after each check and during waits, which `_wait()` slices into ≤5 min. Never log that URL.
+- **GitHub Actions (booker and fallback):**
+  - `booker.yml` is dispatched by the Render monitor (input `trigger`).
+  - `monitor.yml` runs on cron every 5 minutes unless the repo variable `DIAN_GITHUB_MONITOR=0`. Each run polls for about 19 minutes (`run_budget_seconds=1140`). The `dian-monitor` concurrency group queues runs so coverage stays continuous despite cron delays.
 - State lives in the Actions cache: it is restored by the `dian-state-` prefix and saved under a unique key on every run.
-- `captures/` is uploaded as `captures-<run_id>` artifacts. When DIAN's response format is in doubt, check these first.
+- On GitHub, `captures/` is uploaded as `captures-<run_id>` artifacts (on Render it is `/var/data/captures`). When DIAN's response format is in doubt, check these first.
 - `keepalive.yml` re-enables the schedule twice a month.
 - Booker settings:
-  - The repo variable `DIAN_BOOKER=1` turns the booker on, and `BOOKER_DRY_RUN=1` makes it stop before Agendar.
+  - `DIAN_BOOKER=1` turns the booker on (Render env for the Render monitor, repo variable for the fallback). The repo variable `BOOKER_DRY_RUN=1` makes it stop before Agendar.
   - Secrets: `BOOKER_DOC_NUMBER`, `BOOKER_FULL_NAME`, `BOOKER_EMAIL`, `BOOKER_PHONE`, and optionally `BOOKER_DOC_TYPE`.
   - `booker-test.yml` runs the booker by hand on any category, as a dry run by default.
 - The repo must stay public for free Actions minutes, so logs must not contain personal data.

@@ -1,4 +1,4 @@
-"""python -m dian_monitor [--once] [--budget SECONDS] [--telegram-chats | --telegram-test | --report]"""
+"""python -m dian_monitor [--once | --forever] [--budget SECONDS] [--telegram-chats | --telegram-test | --report]"""
 import argparse
 import os
 from datetime import timedelta
@@ -14,6 +14,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog="dian_monitor", description=__doc__)
     parser.add_argument("--once", action="store_true",
                         help="single check now, ignoring cadence and pauses")
+    parser.add_argument("--forever", action="store_true",
+                        help="never stop (always-on hosting such as Render)")
     parser.add_argument("--budget", type=int, default=None,
                         help="seconds to keep polling (default: DIAN_RUN_BUDGET_SECONDS)")
     parser.add_argument("--telegram-chats", action="store_true",
@@ -49,8 +51,11 @@ def main(argv=None):
 
     settings = Settings.from_env()
     log(f"Watching: {settings.label}")
-    marker = Monitor(settings, build_notifier()).run(budget_seconds=args.budget, once=args.once)
-    print(marker, flush=True)
+    monitor = Monitor(settings, build_notifier())
+    if args.forever:
+        monitor.run_forever()
+        return 0
+    print(monitor.run(budget_seconds=args.budget, once=args.once), flush=True)
     return 0
 
 

@@ -164,6 +164,11 @@ def blocked(blocks, until):
                    f"Pauso hasta {until:%H:%M} (Bogotá) y bajo el ritmo.")
 
 
+def booker_unavailable(error):
+    return Message(f"⚠️ No pude arrancar el bot que agenda ({error}). "
+                   "Agenda a mano con el botón de la alerta.", urgent=True)
+
+
 def recovered():
     return Message("✅ Bot DIAN: las revisiones volvieron a funcionar.")
 

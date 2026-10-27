@@ -1,20 +1,24 @@
-"""One invocation: poll on the cadence until the time budget runs out, alerting as needed."""
+"""Poll on the cadence until the time budget runs out (or forever), alerting as needed."""
 import json
 import os
 import random
 import subprocess
 import sys
 import time
+import traceback
 from datetime import datetime, timedelta
 
 from . import cadence, notify
 from .events import EventLog, percentile
+from .health import Health
 from . import state as state_mod
 from .check import FOUND, evaluate
 from .client import TIMEOUT as TIMEOUT_SECONDS
 from .client import Blocked, DianClient, DianError, TimedOut
 
 MAX_BLOCK_PAUSE_MIN = 120
+# Longest single sleep, so the health check keeps getting pings during long waits.
+MAX_SLEEP_SECONDS = 300
 
 
 def log(msg):
@@ -53,20 +57,32 @@ class BookerProcess:
         return True
 
     def wait(self):
-        if self.proc is not None:
+        if self.running():
+            log("Waiting for the booker to finish before ending the run.")
             self.proc.wait()
+
+
+def build_booker(settings):
+    if not settings.booker:
+        return None
+    if settings.booker_repo:
+        from .remote_booker import GitHubBooker
+        return GitHubBooker(settings.booker_repo, os.environ.get("GITHUB_DISPATCH_TOKEN", "").strip(),
+                            settings.booking_file)
+    return BookerProcess()
 
 
 class Monitor:
     def __init__(self, settings, notifier, client=None, clock=cadence.now_bogota,
-                 sleep=time.sleep, rand=random.uniform, booker=None):
+                 sleep=time.sleep, rand=random.uniform, booker=None, health=None):
         self.settings = settings
         self.notifier = notifier
         self.client = client or DianClient()
         self.clock = clock
         self.sleep = sleep
         self.rand = rand
-        self.booker = booker or (BookerProcess() if settings.booker else None)
+        self.booker = booker or build_booker(settings)
+        self.health = health or Health(settings.healthcheck_url)
         self.state = state_mod.load(settings.state_file)
         self.events = EventLog(settings.events_file, clock, "monitor")
         self.stats = {"checks": 0, "errors": 0, "latencies": [], "statuses": {}}
@@ -102,7 +118,14 @@ class Monitor:
     def _maybe_book(self, trigger):
         if self.booker is None or already_booked(self.settings.booking_file):
             return
-        if self.booker.start(trigger):
+        try:
+            started = self.booker.start(trigger)
+        except Exception as e:  # noqa: BLE001 - a booker problem must not stop monitoring
+            log(f"Could not start the booker: {e}")
+            self.events.emit("booker_launch_failed", trigger=trigger, error=str(e)[:300])
+            self.notifier.send(notify.booker_unavailable(e))
+            return
+        if started:
             log(f"Booker started ({trigger}).")
             self.events.emit("booker_launch", trigger=trigger)
 
@@ -239,6 +262,7 @@ class Monitor:
         if result.status != FOUND and latency is not None and latency >= s.slow_seconds:
             self._on_slow(now, latency, timed_out=False)
         self._save()
+        self.health.ping()
         return True
 
     def run(self, budget_seconds=None, once=False):
@@ -259,8 +283,7 @@ class Monitor:
             self.poll()
         else:
             self._loop(deadline)
-        if self.booker is not None and self.booker.running():
-            log("Waiting for the booker to finish before ending the run.")
+        if self.booker is not None:
             self.booker.wait()
         marker = self._marker()
         self._emit_run(marker, start)
@@ -276,6 +299,35 @@ class Monitor:
         self.stats = {"checks": 0, "errors": 0, "latencies": [], "statuses": {}}
         self.events.trim()  # the booker (the only other writer) has finished by now
 
+    def run_forever(self, max_runs=None):
+        """Back-to-back runs of run_budget_seconds each (one `run` event per run), sleeping
+        through block pauses. Unexpected errors are logged and retried after a minute."""
+        runs = 0
+        while max_runs is None or runs < max_runs:
+            runs += 1
+            try:
+                marker = self.run()
+            except Exception as e:  # noqa: BLE001 - keep watching; the health check sees "fail"
+                log(f"Unexpected error, retrying in 60 s: {e!r}")
+                traceback.print_exc()
+                self.events.emit("crash", error=type(e).__name__, message=str(e)[:300])
+                self.stats = {"checks": 0, "errors": 0, "latencies": [], "statuses": {}}
+                self.health.ping("fail")
+                self._wait(60)
+                continue
+            print(marker, flush=True)
+            if marker == "MONITOR_PAUSED":
+                until = _parse(self.state["blocked_until"])
+                self._wait(max(60.0, (until - self.clock()).total_seconds()))
+
+    def _wait(self, seconds):
+        """Sleep in slices, pinging the health check after each one."""
+        while seconds > 0:
+            step = min(seconds, MAX_SLEEP_SECONDS)
+            self.sleep(step)
+            seconds -= step
+            self.health.ping()
+
     def _loop(self, deadline):
         self.sleep(self.rand(0, 10))  # avoid hitting the server on the exact same second
         while True:
@@ -286,7 +338,7 @@ class Monitor:
             if due > deadline:
                 break
             if due > now:
-                self.sleep((due - now).total_seconds())
+                self._wait((due - now).total_seconds())
             if not self.poll():
                 break
 
