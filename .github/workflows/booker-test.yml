@@ -11,6 +11,9 @@ on:
       categoria:
         description: "7 = RUT, 13 = Devoluciones (see config.py)"
         default: "7"
+      city:
+        description: "City to book (videoatención names carry it; presencial picks it in PasoDos)"
+        default: "medellin"
       service:
         description: "Tramite substring when names carry no city"
         default: "persona natural"
@@ -47,6 +50,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           DIAN_TIPO_ATENCION: ${{ inputs.tipo_atencion }}
           DIAN_CATEGORIA: ${{ inputs.categoria }}
+          DIAN_CITY: ${{ inputs.city }}
           DIAN_BOOKING_FILE: /tmp/booking-test.json
           BOOKER_DOC_TYPE: ${{ secrets.BOOKER_DOC_TYPE }}
           BOOKER_DOC_NUMBER: ${{ secrets.BOOKER_DOC_NUMBER }}
