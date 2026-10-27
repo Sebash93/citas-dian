@@ -68,6 +68,7 @@ The flow is `__main__` → `Monitor.run` → `DianClient.find_colas` → `check.
   - With `--trigger found`, it sends the "prepárate" link at once. Otherwise it sends the link only when Medellín appears.
   - It sends "toca el captcha" at PasoTres, then polls `window.captchaValido`.
   - If something fails after the link is sent, it keeps the browser open (`BOOKER_HOLD_MINUTES`) so the human can finish by hand.
+  - Results: `BOOKED`, `DRY_RUN_OK`, `NOT_OPEN` (target never offered), `SLOT_GONE` (`SlotUnavailable`: dates or slot taken first), `CAPTCHA_TIMEOUT`, `FAILED`. Only `FAILED` exits 1, so a red GitHub run always means the booker itself broke.
 - **`wizard.py`:** controls are `[nombre="..."]` (and `div[pantalla="PasoTres"][nombre=...]`), and the dropdowns are native `<select>`s. The date is a Kendo popup: open it with `btnFecha`, change months with `kendoCalendar.navigateToFuture()` because the arrows can't be clicked at phone width, then click the first `td` without `k-disabled`. Steps were verified live up to the captcha on 2026-10-26. The steps after the captcha follow the site's scripts and are unverified until a dry run gets past the captcha.
 
 ### Event log (`events.py`)

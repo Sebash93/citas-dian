@@ -5,7 +5,7 @@ import os
 from dian_monitor.config import Settings
 from dian_monitor.notify import build_notifier
 
-from .booker import BOOKED, DRY_RUN_OK, Booker, log
+from .booker import EXPECTED, Booker, log
 from .profile import Profile, ProfileError
 
 
@@ -39,7 +39,12 @@ def main(argv=None):
                     captcha_minutes=_int_env("BOOKER_CAPTCHA_MINUTES", 10),
                     hold_minutes=_int_env("BOOKER_HOLD_MINUTES", 10)).run()
     print(f"BOOKER_{result}", flush=True)
-    return 0 if result in (BOOKED, DRY_RUN_OK) else 1
+    return exit_code(result)
+
+
+def exit_code(result):
+    """0 for any outcome of the race for a slot (no slot is not an error), 1 when broken."""
+    return 0 if result in EXPECTED else 1
 
 
 if __name__ == "__main__":

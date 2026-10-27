@@ -14,7 +14,7 @@ from dian_monitor.events import EventLog
 from dian_monitor.notify import Message
 
 from .remote import LocalDisplay, RemoteDisplay
-from .wizard import Wizard
+from .wizard import SlotUnavailable, Wizard
 
 WIDTH, HEIGHT = 412, 900  # phone-sized, so the noVNC view needs no zooming
 CDP_PORT = 9222
@@ -26,7 +26,11 @@ BOOKED = "BOOKED"
 DRY_RUN_OK = "DRY_RUN_OK"
 NOT_OPEN = "NOT_OPEN"
 CAPTCHA_TIMEOUT = "CAPTCHA_TIMEOUT"
+SLOT_GONE = "SLOT_GONE"  # the service was offered, but the dates or the slot went before we got them
 FAILED = "FAILED"
+# Outcomes that are part of the race for a slot, not bugs: the process exits 0 for these, so
+# a GitHub run only shows as failed when the booker itself broke (FAILED).
+EXPECTED = (BOOKED, DRY_RUN_OK, NOT_OPEN, SLOT_GONE, CAPTCHA_TIMEOUT)
 
 
 def log(msg):
@@ -240,7 +244,7 @@ class Booker:
                 self.notifier.send_photo(shot, f"Pantalla al fallar ({self.stage})")
             if self.url:
                 self._hold(page, self.hold_minutes)
-            return FAILED
+            return SLOT_GONE if isinstance(e, SlotUnavailable) else FAILED
 
     def _share_link(self, display, make_message):
         self.url = display.url()

@@ -80,6 +80,14 @@ class RemoteTest(unittest.TestCase):
         self.assertNotIn("ab12cd34", out.getvalue())
 
 
+class ExitCodeTest(unittest.TestCase):
+    def test_only_a_broken_booker_fails_the_run(self):
+        from dian_booker.__main__ import exit_code
+        for result in ("BOOKED", "DRY_RUN_OK", "NOT_OPEN", "SLOT_GONE", "CAPTCHA_TIMEOUT"):
+            self.assertEqual(exit_code(result), 0, result)
+        self.assertEqual(exit_code("FAILED"), 1)
+
+
 class FakeBooker:
     def __init__(self):
         self.started = []
