@@ -12,6 +12,7 @@ from dian_booker.profile import Profile, ProfileError  # noqa: E402
 from dian_booker.remote import novnc_url, tunnel_url_in  # noqa: E402
 from dian_booker.wizard import (CityMismatch, PageUnresponsive, Wizard,  # noqa: E402
                                 choose_option, choose_service, is_unresponsive, mentions_city)
+from dian_monitor import events  # noqa: E402
 from dian_monitor.config import Settings  # noqa: E402
 from dian_monitor.monitor import BookerProcess, Monitor, already_booked  # noqa: E402
 from dian_monitor.notify import ConsoleNotifier  # noqa: E402
@@ -41,13 +42,15 @@ class ChooseTest(unittest.TestCase):
         self.assertIsNone(choose_service(options, "medellin"))
         self.assertIsNone(choose_service(options, "medellin", "libros"))
 
-    def test_hint_chooses_among_medellin_tramites_only(self):
-        options = ["", "“Medellín - Solicitud de devolución y/o compensación Vehículos eléctricos”",
+    def test_preference_then_any_medellin_tramite_never_another_city(self):
+        options = ["", "Cali “Solicitud de devolución y/o compensación Vehículos eléctricos”.",
                    "Medellín “Solicitud de devolución y/o compensación persona natural”.",
-                   "Cali “Solicitud de devolución y/o compensación persona natural”."]
-        self.assertEqual(choose_service(options, "medellin"), 1)
-        self.assertEqual(choose_service(options, "medellin", "vehiculos"), 1)
-        self.assertIsNone(choose_service(options[:1] + options[2:], "medellin", "vehiculos"))
+                   "“Medellín - Solicitud de devolución y/o compensación Vehículos eléctricos”"]
+        self.assertEqual(choose_service(options, "medellin", "vehiculos"), 3)  # preferred
+        without = options[:3]  # Medellín vehículos not offered: the general one, not Cali's
+        self.assertEqual(choose_service(without, "medellin", "vehiculos"), 2)
+        self.assertEqual(choose_service(options, "medellin", "no existe, vehiculos"), 3)
+        self.assertIsNone(choose_service(options[:2], "medellin", "vehiculos"))
 
     def test_city_must_be_a_whole_word(self):
         self.assertTrue(mentions_city("“MEDELLÍN - x”", "medellin"))
@@ -168,6 +171,9 @@ class FakeBooker:
     def booked(self):
         return self.is_booked
 
+    def describe(self):
+        return "fake run"
+
     def running(self):
         return self.busy
 
@@ -200,8 +206,24 @@ class BookerLaunchTest(unittest.TestCase):
     def test_opening_starts_one_booker_and_run_waits_for_it(self):
         mon, fake = make([colas("colas_medellin.json")] * 20)
         mon.run(budget_seconds=45 * 14)
-        self.assertEqual(fake.started, ["found"])  # re-alert while it runs: no second one
+        self.assertEqual(fake.started, ["found"])  # checks while it runs: no second one
         self.assertFalse(fake.busy)                 # run() waited for it
+
+    def test_booker_is_replaced_on_the_next_check_while_still_open(self):
+        mon, fake = make([colas("colas_medellin.json")] * 3)
+        mon.poll()
+        fake.busy = False  # the first booker ended (e.g. SLOT_GONE) but Medellín is still open
+        mon.poll()         # no alert is due yet, the booker starts again anyway
+        self.assertEqual(fake.started, ["found", "found"])
+
+    def test_every_decision_change_is_logged(self):
+        mon, fake = make([colas("colas_medellin.json")] * 4)
+        mon.poll()
+        mon.poll()
+        mon.poll()
+        decisions = [(e["decision"], e["detail"]) for e in events.read(mon.settings.events_file)
+                     if e["kind"] == "booker_decision"]
+        self.assertEqual(decisions, [("started", ""), ("running", "fake run")])  # once each
 
     def test_posible_starts_booker(self):
         mon, fake = make([colas("colas_none.json")], latencies=[30])

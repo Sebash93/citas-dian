@@ -65,6 +65,9 @@ class BookerProcess:
             log("Waiting for the booker to finish before ending the run.")
             self.proc.wait()
 
+    def describe(self):
+        return f"local process {self.proc.pid}" if self.running() else "not running"
+
 
 def build_booker(settings):
     if not settings.booker:
@@ -119,29 +122,38 @@ class Monitor:
         log(f"Saved raw response to {path}")
 
     def _maybe_book(self, trigger):
+        """Make sure a booker is running, and record why not when it isn't.
+
+        Called on every check while Medellín is open (and on "posible" alerts), so a booker
+        that ended, failed or never started is replaced within one check. Each change of
+        decision is logged and emitted as `booker_decision`, so an opening without a booker
+        can always be explained from the log.
+        """
+        kind, detail = self._try_booker(trigger)
+        decision = f"{kind}: {detail}" if detail else kind
+        if kind == "started" or decision != self.state["booker_decision"]:
+            log(f"Booker ({trigger}): {decision}")
+            self.events.emit("booker_decision", trigger=trigger, decision=kind,
+                             detail=detail[:300], opening=self.state["open_since"])
+            if kind == "error":
+                self.notifier.send(notify.booker_unavailable(detail))
+        self.state["booker_decision"] = decision
+
+    def _try_booker(self, trigger):
+        """(kind, detail): off, booked, started, running or error. Never raises."""
         if self.booker is None:
-            return
+            return "off", "DIAN_BOOKER is not 1"
         try:
             if self.booker.booked():
-                self._skip_booked(trigger)
-                return
-            started = self.booker.start(trigger)
+                self._notify_booked_once(trigger)
+                return "booked", "a Medellín booking is recorded"
+            if self.booker.start(trigger):
+                return "started", ""
+            return "running", self.booker.describe()
         except Exception as e:  # noqa: BLE001 - a booker problem must not stop monitoring
-            log(f"Could not start the booker: {e}")
-            self.events.emit("booker_launch_failed", trigger=trigger, error=str(e)[:300])
-            self.notifier.send(notify.booker_unavailable(e))
-            return
-        if started:
-            log(f"Booker started ({trigger}).")
-            self.events.emit("booker_launch", trigger=trigger)
-        else:
-            log(f"Booker not started ({trigger}): one is already running.")
-            self.events.emit("booker_skipped", trigger=trigger, reason="running")
+            return "error", str(e)
 
-    def _skip_booked(self, trigger):
-        """A Medellín booking is recorded: say so (once per opening) instead of staying silent."""
-        log(f"Booker not started ({trigger}): a Medellín booking is already recorded.")
-        self.events.emit("booker_skipped", trigger=trigger, reason="booked")
+    def _notify_booked_once(self, trigger):
         key = self.state["open_since"] or trigger
         if self.state["booked_notice_for"] != key:
             self.notifier.send(notify.booker_skipped_booked())
@@ -212,7 +224,8 @@ class Monitor:
                     if entry["closed"] is None:
                         entry["closed"] = _iso(now)
                         break
-                st.update(open_since=None, open_matches=[], alerts_for_opening=0)
+                st.update(open_since=None, open_matches=[], alerts_for_opening=0,
+                          booker_decision=None)
             if result.other_cities and result.other_cities != st.get("last_other_cities"):
                 log(f"Open elsewhere (not alerting): {result.other_cities}")
                 self.events.emit("other_city", names=result.other_cities)
@@ -235,12 +248,13 @@ class Monitor:
             last = _parse(st["last_alert_at"])
             due = last is None or (now - last).total_seconds() >= self.settings.realert_seconds
             if not due or st["alerts_for_opening"] > self.settings.max_realerts:
+                self._maybe_book("found")  # no alert due, but keep a booker going
                 return
             first = False
         self.notifier.send(notify.opening(self.settings, result.matches, now, first=first))
         st["alerts_for_opening"] += 1
         st["last_alert_at"] = _iso(now)
-        self._maybe_book("found")  # no-op while one is running; retries on each re-alert
+        self._maybe_book("found")  # also on every later check while the opening lasts
 
     # --- loop --------------------------------------------------------------
 

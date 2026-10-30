@@ -117,8 +117,14 @@ tap the captcha.
 The booker only ever picks a tramite whose name contains **Medellín**. There is no default
 option: if no Medellín tramite is offered, it books nothing (`NOT_OPEN`). It checks the
 city again before the captcha and before Agendar, and refuses a real booking for any other
-city. If several Medellín tramites are open, the repo variable `BOOKER_SERVICE` (e.g.
-`vehiculos`) chooses among them.
+city. If several Medellín tramites are open, the repo variable `BOOKER_SERVICE` sets the
+preference (`vehiculos`: "Vehículos eléctricos o Híbridos" first, otherwise any other
+Medellín tramite).
+
+While Medellín is open, the monitor checks on every poll that a booker is running and starts
+a new one if the last one ended. Each change ("started", "running (GitHub run … queued)",
+"booked", "off", "error") is logged on Render and in the event log, and the report lists them
+under each opening, flagging any opening that had no booker.
 
 Only one booker runs at a time. After a real **Medellín** booking (by the bot, or by you in
 the live browser) the workflow uploads an empty `booking-booked` artifact. While it exists,

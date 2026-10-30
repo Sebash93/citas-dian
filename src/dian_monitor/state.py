@@ -23,7 +23,9 @@ def empty():
         "last_possible_at": None,
         "slow_events": [],
         # open_since of the opening for which "a booking is already recorded" was sent.
-        "booked_notice_for": None,          # [{"at": iso, "seconds": float, "timed_out": bool}]
+        "booked_notice_for": None,
+        # Last booker decision ("running: GitHub run 1 in_progress"...); logged only on change.
+        "booker_decision": None,          # [{"at": iso, "seconds": float, "timed_out": bool}]
         "history": [],              # [{"opened": iso, "closed": iso|None, "matches": [...]}]
     }
 

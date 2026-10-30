@@ -31,6 +31,7 @@ class GitHubBooker:
         self.s = session or requests.Session()
         self.monotonic = monotonic
         self.dispatched_at = None
+        self.last_run = None  # the active run seen by the latest running() call
 
     def _call(self, method, path, **kwargs):
         if not self.token:
@@ -58,9 +59,18 @@ class GitHubBooker:
     def running(self):
         if (self.dispatched_at is not None
                 and self.monotonic() - self.dispatched_at < DISPATCH_GRACE_SECONDS):
+            self.last_run = None
             return True
         body = self._call("GET", f"workflows/{WORKFLOW}/runs", params={"per_page": 5})
-        return any(run.get("status") in ACTIVE for run in body.get("workflow_runs", []))
+        self.last_run = next((run for run in body.get("workflow_runs", [])
+                              if run.get("status") in ACTIVE), None)
+        return self.last_run is not None
+
+    def describe(self):
+        """Short, stable text about the active run (logged only when it changes)."""
+        if self.last_run is None:
+            return "dispatched, not visible on GitHub yet"
+        return f"GitHub run {self.last_run.get('id')} {self.last_run.get('status')}"
 
     def start(self, trigger):
         """Dispatch booker.yml unless a run is active. Raises DispatchError."""

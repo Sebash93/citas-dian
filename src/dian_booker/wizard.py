@@ -52,11 +52,13 @@ class WizardError(Exception):
 
 def choose_service(options, city, preferred=""):
     """Index of the tramite to book, or None. Never a default: only a tramite whose name
-    contains the city word is eligible. `preferred` narrows the choice among those
-    (e.g. "vehiculos"); if none of them matches it, nothing is chosen."""
+    contains the city word is eligible. `preferred` is a comma-separated list of name parts
+    in order of preference (e.g. "vehiculos"); if none matches, the first eligible one."""
     eligible = [i for i, o in enumerate(options) if o.strip() and mentions_city(o, city)]
-    if preferred:
-        eligible = [i for i in eligible if normalize(preferred) in normalize(options[i])]
+    for wish in (normalize(w) for w in preferred.split(",") if w.strip()):
+        match = next((i for i in eligible if wish in normalize(options[i])), None)
+        if match is not None:
+            return match
     return eligible[0] if eligible else None
 
 
@@ -137,6 +139,9 @@ class Wizard:
             return None
         select.select_option(index=index)
         self.chosen["servicio"] = options[index].strip()
+        offered = [o.strip() for o in options if o.strip() and mentions_city(o, s.city)]
+        self.log(f"PasoUno: chose {self.chosen['servicio']!r} (preference "
+                 f"{self.service_hint or 'none'!r}) from {s.city} tramites {offered}")
         return self.chosen["servicio"]
 
     def wait_for_service(self, deadline, retry_seconds=20):

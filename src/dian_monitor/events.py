@@ -106,10 +106,20 @@ def report(events, since=None):
 
     out.append(f"\nOpenings (target city): {len(by_kind.get('opening', []))}")
     closes = {e.get("opened"): e for e in by_kind.get("closed", [])}
+    decisions = {}
+    for d in by_kind.get("booker_decision", []):
+        decisions.setdefault(d.get("opening"), []).append(d)
     for e in by_kind.get("opening", []):
         c = closes.get(e["t"])
         dur = f"open {c['minutes']:.0f} min" if c else "close not seen"
         out.append(f"  {e['t']}  {dur}  {e.get('matches')}")
+        # What the booker did during this opening; "NO BOOKER" flags the ones to look into.
+        steps = decisions.get(e["t"], [])
+        if not any(d.get("decision") in ("started", "running") for d in steps):
+            out.append("    NO BOOKER during this opening")
+        for d in steps:
+            detail = f" ({d['detail']})" if d.get("detail") else ""
+            out.append(f"    {d['t'][11:19]} booker {d.get('decision')}{detail}")
     others = by_kind.get("other_city", [])
     if others:
         out.append(f"Openings elsewhere: {len(others)} (last {others[-1]['t']}: {others[-1].get('names')})")

@@ -63,16 +63,18 @@ class MonitorEventsTest(unittest.TestCase):
         mon.poll()
         mon.poll()
         got = events.read(mon.settings.events_file)
-        self.assertEqual([e["kind"] for e in got], ["opening", "closed", "failure"])
-        self.assertEqual(got[1]["minutes"], 3.0)
-        self.assertEqual(got[1]["opened"], got[0]["at"])
-        self.assertEqual(got[2]["error"], "SchemaChanged")
+        self.assertEqual([e["kind"] for e in got],
+                         ["opening", "booker_decision", "closed", "failure"])
+        self.assertEqual((got[1]["decision"], got[1]["opening"]), ("off", got[0]["at"]))
+        self.assertEqual(got[2]["minutes"], 3.0)
+        self.assertEqual(got[2]["opened"], got[0]["at"])
+        self.assertEqual(got[3]["error"], "SchemaChanged")
 
     def test_other_city_and_slow(self):
         mon, _, _ = make_monitor([colas("colas_cali_real.json")], latencies=[30],
                                  heartbeat_hour=23)
         mon.poll()
-        self.assertEqual(self.kinds(mon), ["other_city", "slow"])
+        self.assertEqual(self.kinds(mon), ["other_city", "slow", "booker_decision"])
 
 
 class ScrubTest(unittest.TestCase):
@@ -99,9 +101,12 @@ class ReportTest(unittest.TestCase):
             {"t": t.format(5), "kind": "booker_end", "trigger": "found", "result": "FAILED",
              "stage": "datos", "seconds": 140.0, "error": "WizardError: x"},
             {"t": t.format(6), "kind": "closed", "opened": t.format(2), "minutes": 4.0},
+            {"t": t.format(2), "kind": "booker_decision", "opening": t.format(2),
+             "decision": "booked", "detail": "a Medellín booking is recorded"},
         ]
         text = events.report(sample)
         for expected in ("1 runs, 20 checks, 1 failed (5.0%)", "TimedOut 1", "open 4 min",
+                         "NO BOOKER during this opening", "booker booked (a Medellín booking",
                          "FAILED at datos", "captcha_shown 61", "manejadorEncontroColas 8.2/8.2"):
             self.assertIn(expected, text)
         self.assertEqual(events.report([]), "No events.")

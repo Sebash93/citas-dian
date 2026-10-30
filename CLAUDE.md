@@ -63,7 +63,7 @@ The flow is `__main__` → `Monitor.run` → `DianClient.find_colas` → `check.
 
 - **`monitor.py` starts the booker** when `DIAN_BOOKER=1`, on every opening alert and on "posible" alerts, one at a time, and not while a Medellín booking is recorded (`booker.booked()`). `build_booker()` picks how:
   - `GitHubBooker` (`remote_booker.py`, when `DIAN_BOOKER_REPO` is set, i.e. on Render) dispatches `booker.yml` through the GitHub API with `GITHUB_DISPATCH_TOKEN`. It skips the dispatch if a booker run is active. `booked()` checks for a `booking-booked` artifact (uploaded after a real Medellín booking) on every alert, with no local cache, so deleting the artifact re-enables booking.
-  - A skip is never silent: it is logged and emitted as `booker_skipped` (`reason` booked/running), and "booked" also sends one Telegram note per opening. Dispatch errors send a Telegram alert and never stop monitoring; they must never contain the token.
+  - While Medellín is open, `_maybe_book` runs on **every** check (not only on alerts), so a booker that ended or never started is replaced within one check. Its outcome (`off`, `booked`, `started`, `running` with the GitHub run status, `error`) is logged and emitted as `booker_decision` (with `opening`) whenever it changes. "booked" also sends one Telegram note per opening, "error" a Telegram alert. The report lists these under each opening and flags "NO BOOKER during this opening". Dispatch errors send a Telegram alert and never stop monitoring; they must never contain the token.
   - `BookerProcess` (GitHub fallback `monitor.yml`) runs `python -m dian_booker --trigger found|posible` beside the monitor; `run()` waits for it before returning.
 - **`remote.py`:** sets up the remote screen: Xvfb at 412×900 (phone size) → x11vnc (random 8-character password) → websockify/noVNC → Cloudflare quick tunnel. The link is `novnc_url(...)`. On GitHub, `.github/scripts/booker-setup.sh` installs the packages in the background at job start and touches `BOOKER_READY_FILE` when done.
 - **`booker.py`:** launches the system Chrome as a normal (not automation-flagged) window and connects Playwright to it over CDP (`connect_over_cdp`).
@@ -72,13 +72,13 @@ The flow is `__main__` → `Monitor.run` → `DianClient.find_colas` → `check.
   - If something fails after the link is sent, it keeps the browser open (`BOOKER_HOLD_MINUTES`) so the human can finish by hand.
   - Results: `BOOKED`, `DRY_RUN_OK`, `NOT_OPEN` (target never offered), `SLOT_GONE` (`SlotUnavailable`: dates or slot taken first), `UNRESPONSIVE` (DIAN's page timed out; PasoUno retries until the wait ends), `CAPTCHA_TIMEOUT`, `FAILED`. Only `FAILED` exits 1, so a red GitHub run always means the booker itself broke.
   - The browser is held open for the human only after a failure from the captcha on (`HOLD_STAGES`). Earlier failures exit at once so the next alert can start a new booker.
-  - `BOOKER_SERVICE` (repo variable for `booker.yml`) picks among several open Medellín tramites; when set and none matches, nothing is booked.
+  - `BOOKER_SERVICE` (repo variable for `booker.yml`, set to `vehiculos`) is a comma-separated preference among the open Medellín tramites; if none matches, the first Medellín tramite is booked. PasoUno logs which Medellín tramites were offered and which was chosen.
 - **`wizard.py`:** controls are `[nombre="..."]` (and `div[pantalla="PasoTres"][nombre=...]`), and the dropdowns are native `<select>`s. The date is a Kendo popup: open it with `btnFecha`, change months with `kendoCalendar.navigateToFuture()` because the arrows can't be clicked at phone width, then click the first `td` without `k-disabled`. Steps were verified live up to the captcha on 2026-10-26. The steps after the captcha follow the site's scripts and are unverified until a dry run gets past the captcha.
 
 ### Event log (`events.py`)
 
 `EventLog.emit(kind, **fields)` appends to `state/events.jsonl` (`DIAN_EVENTS_FILE`). Both the monitor and the booker subprocess write to it in append mode. Only the monitor trims it, at the end of `run()`, after the booker has finished. `emit` never raises.
-- **Monitor kinds:** `run` (one per run, with counts and latency), `opening`, `closed`, `failure`, `blocked`, `slow`, `other_city`, `booker_launch`, `booker_launch_failed`, `crash`.
+- **Monitor kinds:** `run` (one per run, with counts and latency), `opening`, `closed`, `failure`, `blocked`, `slow`, `other_city`, `booker_decision`, `crash`.
 - **Booker kinds:** `booker_start`, `booker_stage`, `dian_step` (timed from Playwright request events), `booker_link_sent`, `booker_end`.
 - **Reports:** `events.report()` backs `python -m dian_monitor --report [FILE] [--days N]`, and `scripts/report.sh` downloads the newest `events-<run_id>` artifact first.
 - **Privacy:** events are uploaded from a public repo, so never put personal data or the link in them. Free text from the booker goes through `Profile.scrub()`.
