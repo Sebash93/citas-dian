@@ -8,9 +8,10 @@ flow follows the site's scripts and must be confirmed with a --dry-run:
   - a known user gets a "datos correctos?" prompt, a new one gets name/email/phone;
   - PasoCuatro shows a summary and `btnAgendarCita`.
 """
+import re
 import time
 
-from dian_monitor.check import city_of, normalize
+from dian_monitor.check import normalize
 from dian_monitor.config import CATEGORIAS
 
 STEP_TIMEOUT = 95  # seconds; DIAN's slowest observed answers are ~35 s, the client allows 90
@@ -23,24 +24,40 @@ class SlotUnavailable(Exception):
     """The wizard says there is nothing to book (anymore)."""
 
 
+class PageUnresponsive(Exception):
+    """DIAN's page did not answer in time (it slows down a lot when slots open)."""
+
+
+class CityMismatch(Exception):
+    """Safety stop: the tramite about to be booked does not name the target city."""
+
+
+def is_unresponsive(error):
+    # Playwright's TimeoutError is matched by name: tests never import Playwright.
+    return isinstance(error, PageUnresponsive) or type(error).__name__ == "TimeoutError"
+
+
+def mentions_city(text, city):
+    """True if `city` appears as a word in `text`, ignoring accents and case.
+
+    DIAN writes the city in different ways ('“Medellín - Solicitud…”' in the API,
+    'Medellín “Solicitud…”' in the wizard), so the check is on the word, not the format.
+    """
+    return re.search(rf"\b{re.escape(normalize(city))}\b", normalize(text)) is not None
+
+
 class WizardError(Exception):
     """The page did not do what we expected; a human can take over through the link."""
 
 
 def choose_service(options, city, preferred=""):
-    """Index of the tramite to book, or None if the target city is not offered.
-
-    Videoatención names carry the city ("“Medellín - Solicitud…”"), so only that city's
-    entry is acceptable. Names without a city (presencial) pick the city later, in PasoDos.
-    """
-    target = normalize(city)
-    entries = [(i, o) for i, o in enumerate(options) if o.strip()]
-    prefixed = [(i, city_of(o)) for i, o in entries if city_of(o) is not None]
-    if prefixed:
-        return next((i for i, c in prefixed if c == target), None)
+    """Index of the tramite to book, or None. Never a default: only a tramite whose name
+    contains the city word is eligible. `preferred` narrows the choice among those
+    (e.g. "vehiculos"); if none of them matches it, nothing is chosen."""
+    eligible = [i for i, o in enumerate(options) if o.strip() and mentions_city(o, city)]
     if preferred:
-        return next((i for i, o in entries if normalize(preferred) in normalize(o)), None)
-    return entries[0][0] if entries else None
+        eligible = [i for i in eligible if normalize(preferred) in normalize(options[i])]
+    return eligible[0] if eligible else None
 
 
 def choose_option(options, wanted):
@@ -56,6 +73,7 @@ class Wizard:
         self.log = log
         self.service_hint = service_hint
         self.chosen = {}
+        self.unresponsive = False
 
     # --- helpers -----------------------------------------------------------
 
@@ -71,7 +89,7 @@ class Wizard:
                 if self.page.locator(sel).first.is_visible():
                     return sel
             time.sleep(0.25)
-        raise WizardError(f"none of {selectors} appeared in {timeout} s")
+        raise PageUnresponsive(f"none of {selectors} appeared in {timeout} s")
 
     def error_text(self):
         for nombre in ("ModalError", "ModalSinCitas"):
@@ -88,7 +106,7 @@ class Wizard:
             if len([o for o in options if o.strip()]):
                 return select, options
             time.sleep(0.25)
-        raise WizardError(f"{nombre} has no options")
+        raise PageUnresponsive(f"{nombre} had no options after {timeout} s")
 
     def click_text(self, nombre, text):
         self.ctrl(nombre).wait_for(timeout=STEP_TIMEOUT * 1000)
@@ -122,14 +140,31 @@ class Wizard:
         return self.chosen["servicio"]
 
     def wait_for_service(self, deadline, retry_seconds=20):
-        """Retry PasoUno until the target tramite is offered or `deadline` (monotonic) passes."""
+        """Retry PasoUno until the target tramite is offered or `deadline` (monotonic) passes.
+        A page that does not load is retried too; `self.unresponsive` tells whether the last
+        try timed out (as opposed to DIAN answering that the city is not offered)."""
         while True:
-            service = self.find_service()
+            try:
+                service = self.find_service()
+                self.unresponsive = False
+            except Exception as e:  # noqa: BLE001 - only timeouts are retried
+                if not is_unresponsive(e):
+                    raise
+                self.unresponsive = True
+                self.log(f"PasoUno: DIAN's page is unresponsive ({type(e).__name__}); retrying.")
+                service = None
             if service:
                 return service
             if time.monotonic() + retry_seconds > deadline:
                 return None
             time.sleep(retry_seconds)
+
+    def check_city(self):
+        """Safety stop before the captcha and before Agendar: the chosen tramite must name
+        the target city, whatever happened earlier in the wizard."""
+        service = self.chosen.get("servicio", "")
+        if not mentions_city(service, self.settings.city):
+            raise CityMismatch(f"chosen tramite does not name {self.settings.city}: {service!r}")
 
     # --- PasoDos: ciudad, sede, fecha, hora ---------------------------------
 
@@ -184,6 +219,7 @@ class Wizard:
     # --- PasoTres: documento, captcha, datos --------------------------------
 
     def before_captcha(self, profile):
+        self.check_city()
         select, options = self.select_options("TipoDocumento")
         index = choose_option(options, profile.doc_type)
         if index is None:
@@ -237,6 +273,7 @@ class Wizard:
 
     def confirm(self):
         """Click Agendar and return the confirmation text."""
+        self.check_city()
         self.ctrl("btnAgendarCita").click()
         found = self.wait_any(['[nombre="ModalInfoCita"]', '[nombre="ModalError"]',
                                '[nombre="ModalSinCitas"]'], timeout=STEP_TIMEOUT * 2)

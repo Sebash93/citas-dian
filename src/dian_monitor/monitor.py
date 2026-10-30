@@ -44,8 +44,12 @@ def already_booked(path):
 class BookerProcess:
     """Runs `python -m dian_booker --trigger <why>` beside the monitor, one at a time."""
 
-    def __init__(self):
+    def __init__(self, booking_file):
+        self.booking_file = booking_file
         self.proc = None
+
+    def booked(self):
+        return already_booked(self.booking_file)
 
     def running(self):
         return self.proc is not None and self.proc.poll() is None
@@ -67,9 +71,8 @@ def build_booker(settings):
         return None
     if settings.booker_repo:
         from .remote_booker import GitHubBooker
-        return GitHubBooker(settings.booker_repo, os.environ.get("GITHUB_DISPATCH_TOKEN", "").strip(),
-                            settings.booking_file)
-    return BookerProcess()
+        return GitHubBooker(settings.booker_repo, os.environ.get("GITHUB_DISPATCH_TOKEN", "").strip())
+    return BookerProcess(settings.booking_file)
 
 
 class Monitor:
@@ -116,9 +119,12 @@ class Monitor:
         log(f"Saved raw response to {path}")
 
     def _maybe_book(self, trigger):
-        if self.booker is None or already_booked(self.settings.booking_file):
+        if self.booker is None:
             return
         try:
+            if self.booker.booked():
+                self._skip_booked(trigger)
+                return
             started = self.booker.start(trigger)
         except Exception as e:  # noqa: BLE001 - a booker problem must not stop monitoring
             log(f"Could not start the booker: {e}")
@@ -128,6 +134,18 @@ class Monitor:
         if started:
             log(f"Booker started ({trigger}).")
             self.events.emit("booker_launch", trigger=trigger)
+        else:
+            log(f"Booker not started ({trigger}): one is already running.")
+            self.events.emit("booker_skipped", trigger=trigger, reason="running")
+
+    def _skip_booked(self, trigger):
+        """A Medellín booking is recorded: say so (once per opening) instead of staying silent."""
+        log(f"Booker not started ({trigger}): a Medellín booking is already recorded.")
+        self.events.emit("booker_skipped", trigger=trigger, reason="booked")
+        key = self.state["open_since"] or trigger
+        if self.state["booked_notice_for"] != key:
+            self.notifier.send(notify.booker_skipped_booked())
+            self.state["booked_notice_for"] = key
 
     # --- outcomes ----------------------------------------------------------
 

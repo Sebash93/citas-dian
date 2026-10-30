@@ -13,7 +13,7 @@ from dian_monitor import events  # noqa: E402
 from dian_monitor.client import Blocked  # noqa: E402
 from dian_monitor.config import Settings  # noqa: E402
 from dian_monitor.health import Health  # noqa: E402
-from dian_monitor.monitor import BookerProcess, Monitor, already_booked, build_booker  # noqa: E402
+from dian_monitor.monitor import BookerProcess, Monitor, build_booker  # noqa: E402
 from dian_monitor.notify import ConsoleNotifier  # noqa: E402
 from dian_monitor.remote_booker import DispatchError, GitHubBooker  # noqa: E402
 from test_monitor import FRIDAY, Clock, FakeClient, FakeResponse, colas  # noqa: E402
@@ -119,10 +119,9 @@ class HealthTest(unittest.TestCase):
 
 
 class GitHubBookerTest(unittest.TestCase):
-    def booker(self, gh, path=None):
-        path = path or os.path.join(tempfile.mkdtemp(), "booking.json")
+    def booker(self, gh):
         t = [0.0]
-        return GitHubBooker("me/repo", TOKEN, path, session=gh, monotonic=lambda: t[0]), t
+        return GitHubBooker("me/repo", TOKEN, session=gh, monotonic=lambda: t[0]), t
 
     def test_dispatches_with_trigger_and_counts_as_running_meanwhile(self):
         gh = FakeGitHub()
@@ -142,10 +141,20 @@ class GitHubBookerTest(unittest.TestCase):
         self.assertFalse(b.start("posible"))
         self.assertNotIn("POST", [c[0] for c in gh.calls])
 
-    def test_booked_artifact_stops_dispatches_and_is_remembered(self):
-        b, _ = self.booker(FakeGitHub(artifacts=1))
-        self.assertFalse(b.start("found"))
-        self.assertTrue(already_booked(b.booking_file))
+    def test_booked_reads_the_artifact_every_time(self):
+        gh = FakeGitHub(artifacts=1)
+        b, _ = self.booker(gh)
+        self.assertTrue(b.booked())
+        gh.artifacts = 0  # artifact deleted on GitHub: booking is re-enabled at once
+        self.assertFalse(b.booked())
+
+    def test_booked_artifact_stops_the_monitor_from_dispatching(self):
+        gh = FakeGitHub(artifacts=1)
+        b, _ = self.booker(gh)
+        mon, _, notifier, _ = make([colas("colas_medellin.json")], booker=b)
+        mon.poll()
+        self.assertNotIn("POST", [c[0] for c in gh.calls])
+        self.assertTrue(any("ya hay una cita" in m.text for m in notifier.sent))
 
     def test_errors_never_carry_the_token(self):
         b, _ = self.booker(FakeGitHub(dispatch_status=401))
@@ -155,7 +164,7 @@ class GitHubBookerTest(unittest.TestCase):
         self.assertNotIn(TOKEN, str(ctx.exception))
 
     def test_missing_token(self):
-        b = GitHubBooker("me/repo", "", "/tmp/x.json", session=FakeGitHub())
+        b = GitHubBooker("me/repo", "", session=FakeGitHub())
         with self.assertRaises(DispatchError):
             b.start("found")
 
@@ -168,8 +177,7 @@ class BookerChoiceTest(unittest.TestCase):
                               GitHubBooker)
 
     def test_dispatch_failure_alerts_and_keeps_monitoring(self):
-        gh = GitHubBooker("me/repo", TOKEN, "/nonexistent/booking.json",
-                          session=FakeGitHub(dispatch_status=401))
+        gh = GitHubBooker("me/repo", TOKEN, session=FakeGitHub(dispatch_status=401))
         mon, _, notifier, _ = make([colas("colas_medellin.json"), colas("colas_none.json")],
                                    booker=gh)
         self.assertTrue(mon.poll())

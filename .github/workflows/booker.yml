@@ -49,6 +49,8 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           BOOKER_DRY_RUN: ${{ vars.BOOKER_DRY_RUN }}
+          # Optional: which Medellín tramite to prefer when several are open (e.g. vehiculos).
+          BOOKER_SERVICE: ${{ vars.BOOKER_SERVICE }}
           BOOKER_DOC_TYPE: ${{ secrets.BOOKER_DOC_TYPE }}
           BOOKER_DOC_NUMBER: ${{ secrets.BOOKER_DOC_NUMBER }}
           BOOKER_FULL_NAME: ${{ secrets.BOOKER_FULL_NAME }}

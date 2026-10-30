@@ -114,9 +114,21 @@ If anything fails after the link was sent, the browser stays open 10 minutes so 
 by hand. Add more people to `TELEGRAM_CHAT_ID` (comma-separated) so that anyone you trust can
 tap the captcha.
 
-Only one booker runs at a time. After a real booking, the workflow uploads an empty
-`booking-booked` artifact, and the monitor stops starting bookers once it sees it. Delete
-that artifact if you ever need to book again.
+The booker only ever picks a tramite whose name contains **Medellín**. There is no default
+option: if no Medellín tramite is offered, it books nothing (`NOT_OPEN`). It checks the
+city again before the captcha and before Agendar, and refuses a real booking for any other
+city. If several Medellín tramites are open, the repo variable `BOOKER_SERVICE` (e.g.
+`vehiculos`) chooses among them.
+
+Only one booker runs at a time. After a real **Medellín** booking (by the bot, or by you in
+the live browser) the workflow uploads an empty `booking-booked` artifact. While it exists,
+the monitor starts no more bookers and tells you so on Telegram. Delete the artifact on
+GitHub to book again; the monitor checks it on every alert. Bookings for other cities are
+never recorded.
+
+If DIAN's page doesn't load, the booker retries instead of failing and reports
+`UNRESPONSIVE`. A failure before the captcha closes the browser at once, so the next alert
+can start a new booker; from the captcha on, the browser stays open for you to finish.
 
 Setup:
 - On Render: `DIAN_BOOKER=1` and `GITHUB_DISPATCH_TOKEN`. For the GitHub fallback: repo

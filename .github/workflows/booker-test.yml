@@ -1,22 +1,23 @@
 name: Booker test run
 
-# Runs the booker by hand on any open category (e.g. Presencial / RUT / Medellín) to check
-# the live link, the wizard and timings. Dry run by default: it never clicks Agendar.
+# Runs the booker by hand to check the live link, the wizard and timings. Dry run by default:
+# it never clicks Agendar. Only tramites whose name contains the city are ever chosen, and a
+# real (non-dry) run is refused for any city other than Medellín.
 on:
   workflow_dispatch:
     inputs:
       tipo_atencion:
         description: "1 = Presencial, 2 = Videoatención"
-        default: "1"
+        default: "2"
       categoria:
-        description: "7 = RUT, 13 = Devoluciones (see config.py)"
-        default: "7"
+        description: "13 = Devoluciones, 7 = RUT (see config.py)"
+        default: "13"
       city:
         description: "City to book (videoatención names carry it; presencial picks it in PasoDos)"
         default: "medellin"
       service:
-        description: "Tramite substring when names carry no city"
-        default: "persona natural"
+        description: "Optional: which of the city's tramites (e.g. vehiculos)"
+        default: ""
       dry_run:
         description: "Stop before Agendar"
         type: boolean

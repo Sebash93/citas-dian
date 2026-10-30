@@ -169,6 +169,12 @@ def booker_unavailable(error):
                    "Agenda a mano con el botón de la alerta.", urgent=True)
 
 
+def booker_skipped_booked():
+    return Message("ℹ️ No arranqué el bot que agenda: ya hay una cita de Medellín registrada. "
+                   "Si no la tienes, borra el registro (artefacto booking-booked en GitHub) "
+                   "para que vuelva a agendar.", urgent=True)
+
+
 def recovered():
     return Message("✅ Bot DIAN: las revisiones volvieron a funcionar.")
 

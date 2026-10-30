@@ -14,7 +14,7 @@ from dian_monitor.events import EventLog
 from dian_monitor.notify import Message
 
 from .remote import LocalDisplay, RemoteDisplay
-from .wizard import SlotUnavailable, Wizard
+from .wizard import SlotUnavailable, Wizard, is_unresponsive, mentions_city
 
 WIDTH, HEIGHT = 412, 900  # phone-sized, so the noVNC view needs no zooming
 CDP_PORT = 9222
@@ -27,10 +27,14 @@ DRY_RUN_OK = "DRY_RUN_OK"
 NOT_OPEN = "NOT_OPEN"
 CAPTCHA_TIMEOUT = "CAPTCHA_TIMEOUT"
 SLOT_GONE = "SLOT_GONE"  # the service was offered, but the dates or the slot went before we got them
+UNRESPONSIVE = "UNRESPONSIVE"  # DIAN's page stopped answering (it slows down when slots open)
 FAILED = "FAILED"
 # Outcomes that are part of the race for a slot, not bugs: the process exits 0 for these, so
 # a GitHub run only shows as failed when the booker itself broke (FAILED).
-EXPECTED = (BOOKED, DRY_RUN_OK, NOT_OPEN, SLOT_GONE, CAPTCHA_TIMEOUT)
+EXPECTED = (BOOKED, DRY_RUN_OK, NOT_OPEN, SLOT_GONE, CAPTCHA_TIMEOUT, UNRESPONSIVE)
+# Only from the captcha on is there something for the human to finish by hand; earlier
+# failures end at once so the next opening can start a new booker without waiting.
+HOLD_STAGES = ("captcha", "datos", "confirmar")
 
 
 def log(msg):
@@ -101,6 +105,12 @@ def msg_failed(stage, error, url, hold_minutes):
 
 def msg_not_open(minutes):
     return Message(f"ℹ️ Bot DIAN: Medellín no apareció en {minutes} min; cierro el navegador.")
+
+
+def msg_unresponsive(stage, minutes_held):
+    tail = (f"Dejo el navegador abierto {minutes_held} min por si quieres seguir a mano."
+            if minutes_held else "Cierro el navegador; el próximo aviso lo vuelve a intentar.")
+    return Message(f"⏳ La página de la DIAN no respondió ({stage}). {tail}")
 
 
 # --- run ----------------------------------------------------------------------
@@ -196,6 +206,11 @@ class Booker:
             deadline = started + self.wait_minutes * 60
             service = wizard.wait_for_service(deadline)
             if not service:
+                if wizard.unresponsive:
+                    log(f"DIAN's page was still unresponsive after {self.wait_minutes} min.")
+                    if self.url:
+                        self.notifier.send(msg_unresponsive(self.stage, 0))
+                    return UNRESPONSIVE
                 log(f"Target not offered within {self.wait_minutes} min.")
                 if self.url:
                     self.notifier.send(msg_not_open(self.wait_minutes))
@@ -226,7 +241,7 @@ class Booker:
             if self.dry_run:
                 self._shot(page, "dry-run")
                 self.notifier.send(msg_dry_run(wizard.chosen))
-                self._hold(page, minutes=2)
+                self._hold(page, 2, wizard.chosen)
                 return DRY_RUN_OK
             self.stage = "confirmar"
             confirmation = wizard.confirm()
@@ -236,15 +251,22 @@ class Booker:
             self.notifier.send_photo(self._shot(page, "booked"), confirmation[:900])
             return BOOKED
         except Exception as e:  # noqa: BLE001 - report it, then let the human take over
-            log(f"Failed at {self.stage}: {type(e).__name__}")
             self.error = e
-            shot = self._shot(page, "failed")
-            self.notifier.send(msg_failed(self.stage, e, self.url, self.hold_minutes))
-            if shot:
-                self.notifier.send_photo(shot, f"Pantalla al fallar ({self.stage})")
-            if self.url:
-                self._hold(page, self.hold_minutes)
-            return SLOT_GONE if isinstance(e, SlotUnavailable) else FAILED
+            hold = self.hold_minutes if self.url and self.stage in HOLD_STAGES else 0
+            if is_unresponsive(e):
+                log(f"DIAN's page stopped answering at {self.stage}.")
+                self.notifier.send(msg_unresponsive(self.stage, hold))
+                result = UNRESPONSIVE
+            else:
+                log(f"Failed at {self.stage}: {type(e).__name__}")
+                shot = self._shot(page, "failed")
+                self.notifier.send(msg_failed(self.stage, e, self.url if hold else None, hold))
+                if shot:
+                    self.notifier.send_photo(shot, f"Pantalla al fallar ({self.stage})")
+                result = SLOT_GONE if isinstance(e, SlotUnavailable) else FAILED
+            if hold:
+                self._hold(page, hold, wizard.chosen)
+            return result
 
     def _share_link(self, display, make_message):
         self.url = display.url()
@@ -252,15 +274,19 @@ class Booker:
             self.notifier.send(make_message(self.url))
             self.events.emit("booker_link_sent")
 
-    def _hold(self, page, minutes):
+    def _hold(self, page, minutes, chosen):
         """Keep the browser alive for the human; stop early if they book by hand."""
         log(f"Holding the browser open for {minutes} min.")
         deadline = time.monotonic() + minutes * 60
         while time.monotonic() < deadline:
             try:
                 if page.locator('[nombre="ModalInfoCita"]:visible').count():
-                    self._record({"via": "a mano en el navegador"})
-                    self.notifier.send(Message("✅ Parece que agendaste a mano. Revisa tu correo."))
+                    if self._record({**chosen, "via": "a mano en el navegador"}):
+                        self.notifier.send(Message("✅ Parece que agendaste a mano. Revisa tu correo."))
+                    else:
+                        self.notifier.send(Message(
+                            "⚠️ Se agendó a mano una cita que NO es de Medellín. No la registro, "
+                            "así que el bot sigue buscando Medellín. Cancélala si no la quieres."))
                     return
             except Exception:  # noqa: BLE001 - the page may be mid-navigation
                 pass
@@ -276,8 +302,15 @@ class Booker:
             return None
 
     def _record(self, chosen):
+        """Mark the target as booked, which stops further bookers. Only a booking whose
+        tramite names the target city counts. Returns whether it was recorded."""
+        if not mentions_city(chosen.get("servicio", ""), self.settings.city):
+            log("A booking was made for another city; not recording it.")
+            self.events.emit("booker_other_city_booking")
+            return False
         path = self.settings.booking_file
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump({"booked": True, "at": cadence.now_bogota().isoformat(timespec="seconds"),
                        "chosen": chosen, "dry_run": False}, f, ensure_ascii=False, indent=2)
+        return True

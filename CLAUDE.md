@@ -10,6 +10,7 @@ Hard constraints:
 - A human always solves the reCAPTCHA. Never add captcha-solving services or audio/AI solvers, and never auto-solve the captcha in any other way.
 - Personal data (BOOKER_* secrets) and the live-browser link must never reach logs or uploaded artifacts. The repo is public. Use `Message(private=True)` for link messages. Screenshots go only to Telegram.
 - Alerts must fire only for Medellín. Openings in other cities are logged and captured, never alerted.
+- The booker books only a tramite whose name contains the word "medellin" (`mentions_city`), with no default or fallback option. DIAN names the city differently in the API (`“Medellín - …”`) and in the wizard (`Medellín “…”`), so match the word, never a format. `Wizard.check_city()` re-checks before the captcha and before Agendar, `_record` only records Medellín bookings, and `dian_booker` refuses real (non-dry) runs for any other city.
 - Keep request volume close to a person refreshing the page (each check is about 2 requests). Change polling rates only in `cadence.py`.
 
 ## Commands
@@ -60,15 +61,18 @@ The flow is `__main__` → `Monitor.run` → `DianClient.find_colas` → `check.
 
 ### Booker (`src/dian_booker/`)
 
-- **`monitor.py` starts the booker** when `DIAN_BOOKER=1`, on every opening alert and on "posible" alerts, one at a time, and not once `state/booking.json` says booked. `build_booker()` picks how:
-  - `GitHubBooker` (`remote_booker.py`, when `DIAN_BOOKER_REPO` is set, i.e. on Render) dispatches `booker.yml` through the GitHub API with `GITHUB_DISPATCH_TOKEN`. It skips the dispatch if a booker run is active or a `booking-booked` artifact exists (uploaded by the workflows after a real booking). Dispatch errors send a Telegram alert and never stop monitoring; they must never contain the token.
+- **`monitor.py` starts the booker** when `DIAN_BOOKER=1`, on every opening alert and on "posible" alerts, one at a time, and not while a Medellín booking is recorded (`booker.booked()`). `build_booker()` picks how:
+  - `GitHubBooker` (`remote_booker.py`, when `DIAN_BOOKER_REPO` is set, i.e. on Render) dispatches `booker.yml` through the GitHub API with `GITHUB_DISPATCH_TOKEN`. It skips the dispatch if a booker run is active. `booked()` checks for a `booking-booked` artifact (uploaded after a real Medellín booking) on every alert, with no local cache, so deleting the artifact re-enables booking.
+  - A skip is never silent: it is logged and emitted as `booker_skipped` (`reason` booked/running), and "booked" also sends one Telegram note per opening. Dispatch errors send a Telegram alert and never stop monitoring; they must never contain the token.
   - `BookerProcess` (GitHub fallback `monitor.yml`) runs `python -m dian_booker --trigger found|posible` beside the monitor; `run()` waits for it before returning.
 - **`remote.py`:** sets up the remote screen: Xvfb at 412×900 (phone size) → x11vnc (random 8-character password) → websockify/noVNC → Cloudflare quick tunnel. The link is `novnc_url(...)`. On GitHub, `.github/scripts/booker-setup.sh` installs the packages in the background at job start and touches `BOOKER_READY_FILE` when done.
 - **`booker.py`:** launches the system Chrome as a normal (not automation-flagged) window and connects Playwright to it over CDP (`connect_over_cdp`).
   - With `--trigger found`, it sends the "prepárate" link at once. Otherwise it sends the link only when Medellín appears.
   - It sends "toca el captcha" at PasoTres, then polls `window.captchaValido`.
   - If something fails after the link is sent, it keeps the browser open (`BOOKER_HOLD_MINUTES`) so the human can finish by hand.
-  - Results: `BOOKED`, `DRY_RUN_OK`, `NOT_OPEN` (target never offered), `SLOT_GONE` (`SlotUnavailable`: dates or slot taken first), `CAPTCHA_TIMEOUT`, `FAILED`. Only `FAILED` exits 1, so a red GitHub run always means the booker itself broke.
+  - Results: `BOOKED`, `DRY_RUN_OK`, `NOT_OPEN` (target never offered), `SLOT_GONE` (`SlotUnavailable`: dates or slot taken first), `UNRESPONSIVE` (DIAN's page timed out; PasoUno retries until the wait ends), `CAPTCHA_TIMEOUT`, `FAILED`. Only `FAILED` exits 1, so a red GitHub run always means the booker itself broke.
+  - The browser is held open for the human only after a failure from the captcha on (`HOLD_STAGES`). Earlier failures exit at once so the next alert can start a new booker.
+  - `BOOKER_SERVICE` (repo variable for `booker.yml`) picks among several open Medellín tramites; when set and none matches, nothing is booked.
 - **`wizard.py`:** controls are `[nombre="..."]` (and `div[pantalla="PasoTres"][nombre=...]`), and the dropdowns are native `<select>`s. The date is a Kendo popup: open it with `btnFecha`, change months with `kendoCalendar.navigateToFuture()` because the arrows can't be clicked at phone width, then click the first `td` without `k-disabled`. Steps were verified live up to the captcha on 2026-10-26. The steps after the captcha follow the site's scripts and are unverified until a dry run gets past the captcha.
 
 ### Event log (`events.py`)

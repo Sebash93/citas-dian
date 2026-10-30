@@ -2,11 +2,15 @@
 import argparse
 import os
 
+from dian_monitor.check import normalize
 from dian_monitor.config import Settings
 from dian_monitor.notify import build_notifier
 
 from .booker import EXPECTED, Booker, log
 from .profile import Profile, ProfileError
+
+
+TARGET_CITY = "medellin"
 
 
 def _int_env(name, default):
@@ -23,7 +27,7 @@ def main(argv=None):
     parser.add_argument("--local", action="store_true",
                         help="use this computer's screen instead of Xvfb + noVNC + tunnel")
     parser.add_argument("--service", default=os.environ.get("BOOKER_SERVICE", ""),
-                        help="tramite substring, for categories whose names carry no city")
+                        help="tramite substring to choose among the city's tramites (e.g. vehiculos)")
     args = parser.parse_args(argv)
 
     try:
@@ -32,6 +36,10 @@ def main(argv=None):
         log(f"Not starting: {e}.")
         return 2
     settings = Settings.from_env()
+    if normalize(settings.city) != TARGET_CITY and not args.dry_run:
+        log(f"Not starting: real bookings are only for Medellín (DIAN_CITY={settings.city!r}). "
+            "Other cities can only be tested with --dry-run.")
+        return 2
     log(f"Starting ({args.trigger}{', dry run' if args.dry_run else ''}): {settings.label}")
     result = Booker(settings, profile, build_notifier(), trigger=args.trigger,
                     dry_run=args.dry_run, local=args.local, service_hint=args.service,

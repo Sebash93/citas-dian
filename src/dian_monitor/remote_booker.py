@@ -1,12 +1,12 @@
 """Start the booker as a GitHub Actions run when the monitor runs elsewhere (Render).
 
 The monitor dispatches `booker.yml` through the GitHub API with a fine-grained token
-(this repo only, "Actions: read and write") in GITHUB_DISPATCH_TOKEN. After a real booking,
-booker.yml uploads an empty `booking-booked` artifact; seeing it stops further dispatches.
+(this repo only, "Actions: read and write") in GITHUB_DISPATCH_TOKEN. After a real Medellín
+booking, booker.yml uploads an empty `booking-booked` artifact; while it exists the monitor
+starts no more bookers. It is checked on every alert (no local cache), so deleting the
+artifact on GitHub re-enables booking at once.
 Errors never include the token: they carry only the HTTP status and GitHub's message.
 """
-import json
-import os
 import time
 
 import requests
@@ -24,11 +24,9 @@ class DispatchError(Exception):
 
 
 class GitHubBooker:
-    def __init__(self, repo, token, booking_file, ref="main", session=None,
-                 monotonic=time.monotonic):
+    def __init__(self, repo, token, ref="main", session=None, monotonic=time.monotonic):
         self.repo = repo
         self.token = token
-        self.booking_file = booking_file
         self.ref = ref
         self.s = session or requests.Session()
         self.monotonic = monotonic
@@ -53,14 +51,9 @@ class GitHubBooker:
         return resp.json() if resp.status_code != 204 else None
 
     def booked(self):
-        """True once booker.yml reported a real booking; remembered in the local booking file."""
+        """True while a `booking-booked` artifact (a real Medellín booking) exists."""
         body = self._call("GET", "artifacts", params={"name": BOOKED_ARTIFACT, "per_page": 1})
-        if not body.get("total_count"):
-            return False
-        os.makedirs(os.path.dirname(self.booking_file) or ".", exist_ok=True)
-        with open(self.booking_file, "w", encoding="utf-8") as f:
-            json.dump({"booked": True, "via": "github"}, f)
-        return True
+        return bool(body.get("total_count"))
 
     def running(self):
         if (self.dispatched_at is not None
@@ -70,8 +63,8 @@ class GitHubBooker:
         return any(run.get("status") in ACTIVE for run in body.get("workflow_runs", []))
 
     def start(self, trigger):
-        """Dispatch booker.yml unless already booked or a run is active. Raises DispatchError."""
-        if self.booked() or self.running():
+        """Dispatch booker.yml unless a run is active. Raises DispatchError."""
+        if self.running():
             return False
         self._call("POST", f"workflows/{WORKFLOW}/dispatches",
                    json={"ref": self.ref, "inputs": {"trigger": trigger}})

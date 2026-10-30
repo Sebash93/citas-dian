@@ -21,7 +21,9 @@ def empty():
         "today": None,
         "last_check_at": None,
         "last_possible_at": None,
-        "slow_events": [],          # [{"at": iso, "seconds": float, "timed_out": bool}]
+        "slow_events": [],
+        # open_since of the opening for which "a booking is already recorded" was sent.
+        "booked_notice_for": None,          # [{"at": iso, "seconds": float, "timed_out": bool}]
         "history": [],              # [{"opened": iso, "closed": iso|None, "matches": [...]}]
     }
 
