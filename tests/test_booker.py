@@ -153,6 +153,19 @@ class SafetyStopTest(unittest.TestCase):
         self.assertIsNone(w.wait_for_service(0, retry_seconds=0))
         self.assertTrue(w.unresponsive)  # → UNRESPONSIVE, not FAILED
 
+    def test_real_booking_outside_videoatencion_devoluciones_is_refused(self):
+        from dian_booker.__main__ import main
+        old = dict(os.environ)
+        try:
+            for codes in ({"DIAN_TIPO_ATENCION": "1"}, {"DIAN_CATEGORIA": "7"}):
+                os.environ.update({**ENV, **codes, "BOOKER_DRY_RUN": ""})
+                self.assertEqual(main(["--trigger", "manual"]), 2)
+                os.environ.clear()
+                os.environ.update(old)
+        finally:
+            os.environ.clear()
+            os.environ.update(old)
+
     def test_real_booking_outside_medellin_is_refused(self):
         from dian_booker.__main__ import main
         env = {**ENV, "DIAN_CITY": "bogota", "BOOKER_DRY_RUN": ""}

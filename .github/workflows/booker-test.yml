@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tipo_atencion:
-        description: "1 = Presencial, 2 = Videoatención"
+        description: "1 = Presencial, 2 = Videoatención (real bookings: only 2)"
         default: "2"
       categoria:
         description: "13 = Devoluciones, 7 = RUT (see config.py)"

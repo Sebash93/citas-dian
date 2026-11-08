@@ -11,6 +11,10 @@ from .profile import Profile, ProfileError
 
 
 TARGET_CITY = "medellin"
+# Real bookings are only for Videoatención (2) / Devoluciones (13). Other codes are for
+# --dry-run wizard checks on categories that happen to be open.
+TARGET_ATENCION = "2"
+TARGET_CATEGORIA = "13"
 
 
 def _int_env(name, default):
@@ -39,6 +43,11 @@ def main(argv=None):
     if normalize(settings.city) != TARGET_CITY and not args.dry_run:
         log(f"Not starting: real bookings are only for Medellín (DIAN_CITY={settings.city!r}). "
             "Other cities can only be tested with --dry-run.")
+        return 2
+    if (settings.tipo_atencion, settings.categoria) != (TARGET_ATENCION, TARGET_CATEGORIA) \
+            and not args.dry_run:
+        log(f"Not starting: real bookings are only for Videoatención / Devoluciones "
+            f"({settings.label}). Others can only be tested with --dry-run.")
         return 2
     log(f"Starting ({args.trigger}{', dry run' if args.dry_run else ''}): {settings.label}")
     result = Booker(settings, profile, build_notifier(), trigger=args.trigger,

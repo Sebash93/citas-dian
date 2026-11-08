@@ -11,6 +11,7 @@ Hard constraints:
 - Personal data (BOOKER_* secrets) and the live-browser link must never reach logs or uploaded artifacts. The repo is public. Use `Message(private=True)` for link messages. Screenshots go only to Telegram.
 - Alerts must fire only for Medellín. Openings in other cities are logged and captured, never alerted.
 - The booker books only a tramite whose name contains the word "medellin" (`mentions_city`), with no default or fallback option. DIAN names the city differently in the API (`“Medellín - …”`) and in the wizard (`Medellín “…”`), so match the word, never a format. `Wizard.check_city()` re-checks before the captcha and before Agendar, `_record` only records Medellín bookings, and `dian_booker` refuses real (non-dry) runs for any other city.
+- Real bookings are always Videoatención / Devoluciones: `dian_booker` refuses non-dry runs with any other `DIAN_TIPO_ATENCION`/`DIAN_CATEGORIA` (those are only for dry-run wizard checks in `booker-test.yml`).
 - Keep request volume close to a person refreshing the page (each check is about 2 requests). Change polling rates only in `cadence.py`.
 
 ## Commands
