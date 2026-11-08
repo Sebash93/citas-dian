@@ -13,8 +13,7 @@ from .events import EventLog, percentile
 from .health import Health
 from . import state as state_mod
 from .check import FOUND, evaluate
-from .client import TIMEOUT as TIMEOUT_SECONDS
-from .client import Blocked, DianClient, DianError, TimedOut
+from .client import Blocked, DianClient, DianError
 
 MAX_BLOCK_PAUSE_MIN = 120
 # Longest single sleep, so the health check keeps getting pings during long waits.
@@ -124,7 +123,7 @@ class Monitor:
     def _maybe_book(self, trigger):
         """Make sure a booker is running, and record why not when it isn't.
 
-        Called on every check while Medellín is open (and on "posible" alerts), so a booker
+        Called on every check while Medellín is open (and when another city opens), so a booker
         that ended, failed or never started is replaced within one check. Each change of
         decision is logged and emitted as `booker_decision`, so an opening without a booker
         can always be explained from the log.
@@ -145,7 +144,8 @@ class Monitor:
             return "off", "DIAN_BOOKER is not 1"
         try:
             if self.booker.booked():
-                self._notify_booked_once(trigger)
+                if trigger == "found":  # a watch is silent: nothing is open in Medellín
+                    self._notify_booked_once()
                 return "booked", "a Medellín booking is recorded"
             if self.booker.start(trigger):
                 return "started", ""
@@ -153,11 +153,10 @@ class Monitor:
         except Exception as e:  # noqa: BLE001 - a booker problem must not stop monitoring
             return "error", str(e)
 
-    def _notify_booked_once(self, trigger):
-        key = self.state["open_since"] or trigger
-        if self.state["booked_notice_for"] != key:
+    def _notify_booked_once(self):
+        if self.state["booked_notice_for"] != self.state["open_since"]:
             self.notifier.send(notify.booker_skipped_booked())
-            self.state["booked_notice_for"] = key
+            self.state["booked_notice_for"] = self.state["open_since"]
 
     # --- outcomes ----------------------------------------------------------
 
@@ -195,25 +194,25 @@ class Monitor:
             self.notifier.send(notify.blocked(blocks, until))
             self.state["failure_alert_sent"] = True
 
-    def _on_slow(self, now, seconds, timed_out):
-        """DIAN slows down when slots open: send a 'posible' alert, rate-limited."""
+    def _on_other_cities(self, now, result):
+        """Log every change, and start a silent "watch" booker when a tramite appears that was
+        not open at the last check: DIAN releases cities in waves, so Medellín may be next.
+        Never an alert: the booker sends the link only if Medellín itself shows up."""
         st = self.state
-        st["slow_events"].append({"at": _iso(now), "seconds": round(seconds, 1),
-                                  "timed_out": timed_out})
-        log(f"DIAN slow: {seconds:.1f} s{' (timed out)' if timed_out else ''}")
-        self.events.emit("slow", seconds=round(seconds, 1), timed_out=timed_out)
-        if st["open_since"]:
-            return  # a confirmed Medellín alert is already out
-        last = _parse(st["last_possible_at"])
-        if last and (now - last).total_seconds() < self.settings.possible_cooldown_seconds:
-            return
-        self.notifier.send(notify.possible(self.settings, seconds, now, timed_out))
-        st["last_possible_at"] = _iso(now)
-        if self.settings.booker_on_possible:
-            self._maybe_book("posible")
+        previous = st["last_other_cities"]
+        st["last_other_cities"] = result.other_cities
+        if result.other_cities and result.other_cities != previous:
+            log(f"Open elsewhere (not alerting): {result.other_cities}")
+            self.events.emit("other_city", names=result.other_cities)
+            if result.status != FOUND:  # a Medellín response is captured as such below
+                self._capture(now, result.raw, "other-city")
+        if (result.status != FOUND and self.settings.booker_on_other_city
+                and set(result.other_cities) - set(previous)):
+            self._maybe_book("watch")
 
     def _on_result(self, now, result):
         st = self.state
+        self._on_other_cities(now, result)
         if result.status != FOUND:
             if st["open_since"]:
                 log(f"Medellín opening closed (open since {st['open_since']}).")
@@ -226,11 +225,6 @@ class Monitor:
                         break
                 st.update(open_since=None, open_matches=[], alerts_for_opening=0,
                           booker_decision=None)
-            if result.other_cities and result.other_cities != st.get("last_other_cities"):
-                log(f"Open elsewhere (not alerting): {result.other_cities}")
-                self.events.emit("other_city", names=result.other_cities)
-                self._capture(now, result.raw, "other-city")
-            st["last_other_cities"] = result.other_cities
             return
 
         changed = result.matches != st["open_matches"]
@@ -241,6 +235,8 @@ class Monitor:
                                       "matches": result.matches})
                 self.events.emit("opening", at=_iso(now), matches=result.matches,
                                  latency=self.client.last_latency)
+                # A watch may already be running: log it again under this opening.
+                st["booker_decision"] = None
             st.update(open_matches=result.matches, alerts_for_opening=0)
             self._capture(now, result.raw, "medellin")
             first = True
@@ -273,11 +269,6 @@ class Monitor:
             self._on_blocked(now, e)
             self._save()
             return False
-        except TimedOut as e:
-            self._on_failure(e)
-            self._on_slow(now, float(TIMEOUT_SECONDS), timed_out=True)
-            self._save()
-            return True
         except DianError as e:
             self._on_failure(e)
             self._save()
@@ -291,8 +282,6 @@ class Monitor:
         log(f"Check: {result.status} {result.matches or ''} "
             f"({latency or 0:.1f} s, requests so far: {self.client.requests_made})")
         self._on_result(now, result)
-        if result.status != FOUND and latency is not None and latency >= s.slow_seconds:
-            self._on_slow(now, latency, timed_out=False)
         self._save()
         self.health.ping()
         return True

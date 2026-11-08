@@ -123,9 +123,6 @@ def report(events, since=None):
     others = by_kind.get("other_city", [])
     if others:
         out.append(f"Openings elsewhere: {len(others)} (last {others[-1]['t']}: {others[-1].get('names')})")
-    slow = by_kind.get("slow", [])
-    if slow:
-        out.append(f"Slow-DIAN events: {len(slow)} ({sum(1 for s in slow if s.get('timed_out'))} timeouts)")
 
     attempts = by_kind.get("booker_end", [])
     out.append(f"\nBooker attempts: {len(attempts)}")

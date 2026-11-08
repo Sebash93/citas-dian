@@ -1,16 +1,16 @@
 name: Booker
 
-# Started by the monitor on Render (GitHub API, workflow_dispatch) when Medellín opens or
-# DIAN slows down. Drives the wizard to the reCAPTCHA and sends the live-browser link.
+# Started by the monitor on Render (GitHub API, workflow_dispatch) when Medellín opens or,
+# to watch for Medellín for a few minutes, when another city opens. Drives the wizard to the reCAPTCHA and sends the live-browser link.
 # After a real booking it uploads an empty `booking-booked` artifact, which stops the
 # monitor from starting more bookers. To test by hand use booker-test.yml instead.
 on:
   workflow_dispatch:
     inputs:
       trigger:
-        description: "found: send the link at once; posible: only when Medellín appears"
+        description: "found: send the link at once; watch: only when Medellín appears"
         type: choice
-        options: [found, posible]
+        options: [found, watch]
         default: found
 
 concurrency:

@@ -2,12 +2,14 @@
 
 Xvfb (virtual screen) -> x11vnc (VNC, password) -> websockify + noVNC (VNC in a web page)
 -> cloudflared quick tunnel (public https URL). The packages are installed in the
-background at the start of each workflow run (see monitor.yml), which touches
-BOOKER_READY_FILE when done.
+background at the start of each workflow run (see booker.yml), which touches
+BOOKER_READY_FILE when done. GitHub's runner already has Xvfb and Chrome, so the browser
+starts at once and everything after Xvfb comes up in the background; `url()` waits for it.
 """
 import os
 import re
 import secrets
+import shutil
 import socket
 import subprocess
 import threading
@@ -60,10 +62,13 @@ class RemoteDisplay:
         self.env = {"DISPLAY": display}
         self.procs = []
         self._base = None
+        self._failure = None
         self._ready = threading.Event()
+        self._closed = threading.Event()
 
     def __enter__(self):
-        self._wait_installed()
+        if not shutil.which("Xvfb"):
+            self._wait_installed()
         self._spawn(["Xvfb", self.display, "-screen", "0", f"{self.width}x{self.height}x24",
                      "-nolisten", "tcp"])
         sock = f"/tmp/.X11-unix/X{self.display.lstrip(':')}"
@@ -71,6 +76,18 @@ class RemoteDisplay:
             if os.path.exists(sock):
                 break
             time.sleep(0.1)
+        threading.Thread(target=self._expose, daemon=True).start()
+        return self
+
+    def _expose(self):
+        try:
+            self._start_remote_access()
+        except Exception as e:  # noqa: BLE001 - reported by url()
+            self._failure = e
+            self._ready.set()
+
+    def _start_remote_access(self):
+        self._wait_installed()
         self._spawn(["x11vnc", "-display", self.display, "-rfbport", str(self.vnc_port),
                      "-localhost", "-forever", "-shared", "-passwd", self.password, "-quiet"])
         _wait_port(self.vnc_port, 15)
@@ -80,9 +97,9 @@ class RemoteDisplay:
         tunnel = self._spawn(["cloudflared", "tunnel", "--no-autoupdate", "--url",
                               f"http://localhost:{self.web_port}"], stderr=subprocess.PIPE)
         threading.Thread(target=self._read_tunnel, args=(tunnel,), daemon=True).start()
-        return self
 
     def __exit__(self, *exc):
+        self._closed.set()
         for proc in reversed(self.procs):
             proc.terminate()
         for proc in self.procs:
@@ -92,10 +109,12 @@ class RemoteDisplay:
                 proc.kill()
         return False
 
-    def url(self, timeout=60):
-        """The noVNC link, once the tunnel is up (blocks up to `timeout` seconds)."""
+    def url(self, timeout=300):
+        """The noVNC link, once the packages are installed and the tunnel is up (blocks)."""
         if not self._ready.wait(timeout):
             raise RuntimeError("cloudflared did not report a tunnel URL")
+        if self._failure is not None:
+            raise self._failure
         return novnc_url(self._base, self.password)
 
     def _wait_installed(self, timeout=240):
@@ -104,6 +123,8 @@ class RemoteDisplay:
             return
         deadline = time.monotonic() + timeout
         while not os.path.exists(flag):
+            if self._closed.is_set():
+                raise RuntimeError("the display was closed")
             if time.monotonic() > deadline:
                 raise RuntimeError("display packages were not installed in time")
             time.sleep(1)

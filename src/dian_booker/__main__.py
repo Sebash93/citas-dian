@@ -1,4 +1,4 @@
-"""python -m dian_booker [--trigger found|posible|manual] [--dry-run] [--local]"""
+"""python -m dian_booker [--trigger found|watch|manual] [--dry-run] [--local]"""
 import argparse
 import os
 
@@ -19,7 +19,7 @@ def _int_env(name, default):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="dian_booker", description=__doc__)
-    parser.add_argument("--trigger", choices=("found", "posible", "manual"), default="manual",
+    parser.add_argument("--trigger", choices=("found", "watch", "manual"), default="manual",
                         help="found: send the live link at once; otherwise when the city appears")
     parser.add_argument("--dry-run", action="store_true",
                         default=os.environ.get("BOOKER_DRY_RUN", "") in ("1", "true"),

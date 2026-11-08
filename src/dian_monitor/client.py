@@ -20,8 +20,7 @@ BASE = "https://agendamiento.dian.gov.co"
 RUTA_RECURSOS = "Recursos/CitasDIAN/"
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")
-# DIAN gets very slow when slots open (15-35 s per request observed on 2026-10-20),
-# so be patient: a slow answer is a signal, not a failure.
+# DIAN can get very slow (15-35 s per request observed on 2026-10-20), so be patient.
 TIMEOUT = 90
 
 STEP_COLAS = "manejadorEncontroColas"

@@ -5,6 +5,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 import urllib.request
 from datetime import datetime
@@ -135,6 +136,8 @@ class Booker:
         self.events = EventLog(settings.events_file, cadence.now_bogota, "booker")
         self.error = None
         self.captcha_wait = None
+        self.link_thread = None
+        self.link_error = None
 
     def run(self):
         started = time.monotonic()
@@ -162,6 +165,7 @@ class Booker:
                 with sync_playwright() as pw:
                     browser = pw.chromium.connect_over_cdp(f"http://127.0.0.1:{CDP_PORT}")
                     page = browser.contexts[0].pages[0]
+                    self._mark("browser_ready", started)
                     self._time_dian_steps(page)
                     return self._attempt(page, display, started)
             finally:
@@ -201,7 +205,7 @@ class Booker:
         wizard = Wizard(page, self.settings, log, self.service_hint)
         try:
             if self.trigger == "found":  # confirmed opening: get the human moving right away
-                self._share_link(display, msg_get_ready)
+                self._share_link_soon(display)
             self.stage = "PasoUno"
             deadline = started + self.wait_minutes * 60
             service = wizard.wait_for_service(deadline)
@@ -216,13 +220,13 @@ class Booker:
                     self.notifier.send(msg_not_open(self.wait_minutes))
                 return NOT_OPEN
             self._mark("service_chosen", started)
-            if not self.url:
-                self._share_link(display, msg_get_ready)
+            self._share_link_soon(display)
             self.stage = "PasoDos"
             wizard.pick_slot()
             self._mark("slot_chosen", started)
             self.stage = "PasoTres"
             wizard.before_captcha(self.profile)
+            self._wait_for_link()
             self.notifier.send(msg_tap_captcha(self.url, wizard.chosen) if self.url else
                                Message("🔴 Toca el captcha en la ventana de Chrome.", urgent=True))
             self._mark("captcha_shown", started)
@@ -268,11 +272,30 @@ class Booker:
                 self._hold(page, hold, wizard.chosen)
             return result
 
-    def _share_link(self, display, make_message):
-        self.url = display.url()
-        if self.url:
-            self.notifier.send(make_message(self.url))
-            self.events.emit("booker_link_sent")
+    def _share_link_soon(self, display):
+        """Send the link once the tunnel is up, without holding back the wizard: an opening can
+        be gone in under a minute and the tunnel alone takes 10-40 s. Started once."""
+        if self.link_thread is None:
+            self.link_thread = threading.Thread(target=self._share_link, args=(display,),
+                                                daemon=True)
+            self.link_thread.start()
+
+    def _share_link(self, display):
+        try:
+            self.url = display.url()
+            if self.url:
+                self.notifier.send(msg_get_ready(self.url))
+                self.events.emit("booker_link_sent")
+        except Exception as e:  # noqa: BLE001 - raised again by _wait_for_link at the captcha
+            log(f"Live link failed: {type(e).__name__}")
+            self.link_error = e
+
+    def _wait_for_link(self):
+        """The captcha message needs the link, and must come after "prepárate"."""
+        if self.link_thread is not None:
+            self.link_thread.join()
+        if self.link_error is not None:
+            raise self.link_error
 
     def _hold(self, page, minutes, chosen):
         """Keep the browser alive for the human; stop early if they book by hand."""

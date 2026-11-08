@@ -51,7 +51,7 @@ The flow is `__main__` → `Monitor.run` → `DianClient.find_colas` → `check.
   - the "broken bot" alert after N consecutive failures, plus a recovery message;
   - exponential pauses after blocks (10, 20, 40… min, capped at 120), stored as `blocked_until` so later runs skip;
   - a daily heartbeat;
-  - "posible" alerts when DIAN is slow (≥10 s) or times out, with a cooldown. DIAN slows down when slots open, so slowness is treated as a signal.
+  - a silent "watch" booker when a tramite opens in another city (`_on_other_cities`), since DIAN releases cities in waves. It is dispatched only for a tramite not open at the last check, so a city that stays open can't keep bookers running. Slowness is not used as a signal: over about a week it preceded Medellín in only 1 of about 20 booker runs.
 
   Raw responses for openings are written to `captures/`. `run()` returns a marker string such as `MONITOR_OK_NONE` or `MONITOR_BLOCKED`.
 - **`state.py`**: a JSON state file (`state/state.json`) that persists between runs. `load()` merges stored data over `empty()`, so a new key only needs a default in `empty()`.
@@ -61,13 +61,13 @@ The flow is `__main__` → `Monitor.run` → `DianClient.find_colas` → `check.
 
 ### Booker (`src/dian_booker/`)
 
-- **`monitor.py` starts the booker** when `DIAN_BOOKER=1`, on every opening alert and on "posible" alerts, one at a time, and not while a Medellín booking is recorded (`booker.booked()`). `build_booker()` picks how:
+- **`monitor.py` starts the booker** when `DIAN_BOOKER=1`, on every opening alert and when another city opens (`DIAN_BOOKER_ON_OTHER_CITY`), one at a time, and not while a Medellín booking is recorded (`booker.booked()`). `build_booker()` picks how:
   - `GitHubBooker` (`remote_booker.py`, when `DIAN_BOOKER_REPO` is set, i.e. on Render) dispatches `booker.yml` through the GitHub API with `GITHUB_DISPATCH_TOKEN`. It skips the dispatch if a booker run is active. `booked()` checks for a `booking-booked` artifact (uploaded after a real Medellín booking) on every alert, with no local cache, so deleting the artifact re-enables booking.
   - While Medellín is open, `_maybe_book` runs on **every** check (not only on alerts), so a booker that ended or never started is replaced within one check. Its outcome (`off`, `booked`, `started`, `running` with the GitHub run status, `error`) is logged and emitted as `booker_decision` (with `opening`) whenever it changes. "booked" also sends one Telegram note per opening, "error" a Telegram alert. The report lists these under each opening and flags "NO BOOKER during this opening". Dispatch errors send a Telegram alert and never stop monitoring; they must never contain the token.
-  - `BookerProcess` (GitHub fallback `monitor.yml`) runs `python -m dian_booker --trigger found|posible` beside the monitor; `run()` waits for it before returning.
-- **`remote.py`:** sets up the remote screen: Xvfb at 412×900 (phone size) → x11vnc (random 8-character password) → websockify/noVNC → Cloudflare quick tunnel. The link is `novnc_url(...)`. On GitHub, `.github/scripts/booker-setup.sh` installs the packages in the background at job start and touches `BOOKER_READY_FILE` when done.
+  - `BookerProcess` (GitHub fallback `monitor.yml`) runs `python -m dian_booker --trigger found|watch` beside the monitor; `run()` waits for it before returning.
+- **`remote.py`:** sets up the remote screen: Xvfb at 412×900 (phone size) → x11vnc (random 8-character password) → websockify/noVNC → Cloudflare quick tunnel. The link is `novnc_url(...)`. On GitHub, `.github/scripts/booker-setup.sh` installs the packages in the background at job start and touches `BOOKER_READY_FILE` when done. Xvfb and Chrome are preinstalled on the runner, so the browser starts at once and everything after Xvfb comes up in a background thread; `url()` blocks until the tunnel is up.
 - **`booker.py`:** launches the system Chrome as a normal (not automation-flagged) window and connects Playwright to it over CDP (`connect_over_cdp`).
-  - With `--trigger found`, it sends the "prepárate" link at once. Otherwise it sends the link only when Medellín appears.
+  - With `--trigger found`, it sends the "prepárate" link as soon as the tunnel is up, from a background thread, so the wizard never waits for the tunnel. With `watch`, it sends the link only when Medellín appears. "Toca el captcha" always waits for the link (`_wait_for_link`).
   - It sends "toca el captcha" at PasoTres, then polls `window.captchaValido`.
   - If something fails after the link is sent, it keeps the browser open (`BOOKER_HOLD_MINUTES`) so the human can finish by hand.
   - Results: `BOOKED`, `DRY_RUN_OK`, `NOT_OPEN` (target never offered), `SLOT_GONE` (`SlotUnavailable`: dates or slot taken first), `UNRESPONSIVE` (DIAN's page timed out; PasoUno retries until the wait ends), `CAPTCHA_TIMEOUT`, `FAILED`. Only `FAILED` exits 1, so a red GitHub run always means the booker itself broke.
@@ -78,7 +78,7 @@ The flow is `__main__` → `Monitor.run` → `DianClient.find_colas` → `check.
 ### Event log (`events.py`)
 
 `EventLog.emit(kind, **fields)` appends to `state/events.jsonl` (`DIAN_EVENTS_FILE`). Both the monitor and the booker subprocess write to it in append mode. Only the monitor trims it, at the end of `run()`, after the booker has finished. `emit` never raises.
-- **Monitor kinds:** `run` (one per run, with counts and latency), `opening`, `closed`, `failure`, `blocked`, `slow`, `other_city`, `booker_decision`, `crash`.
+- **Monitor kinds:** `run` (one per run, with counts and latency), `opening`, `closed`, `failure`, `blocked`, `other_city`, `booker_decision`, `crash`.
 - **Booker kinds:** `booker_start`, `booker_stage`, `dian_step` (timed from Playwright request events), `booker_link_sent`, `booker_end`.
 - **Reports:** `events.report()` backs `python -m dian_monitor --report [FILE] [--days N]`, and `scripts/report.sh` downloads the newest `events-<run_id>` artifact first.
 - **Privacy:** events are uploaded from a public repo, so never put personal data or the link in them. Free text from the booker goes through `Profile.scrub()`.

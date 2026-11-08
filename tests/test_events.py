@@ -47,7 +47,7 @@ class MonitorEventsTest(unittest.TestCase):
     def test_run_summary(self):
         none = colas("colas_none.json")
         mon, _, _ = make_monitor([none] * 10, heartbeat_hour=23)
-        mon.run(budget_seconds=45 * 3)
+        mon.run(budget_seconds=60)  # Friday 9:30: checks at ~5, 25 and 45 s
         run = events.read(mon.settings.events_file)[-1]
         self.assertEqual(run["kind"], "run")
         self.assertEqual(run["marker"], "MONITOR_OK_NONE")
@@ -63,6 +63,9 @@ class MonitorEventsTest(unittest.TestCase):
         mon.poll()
         mon.poll()
         got = events.read(mon.settings.events_file)
+        # The fixture also lists another city: recorded too, to see what opens with Medellín.
+        self.assertEqual(got[0]["kind"], "other_city")
+        got = got[1:]
         self.assertEqual([e["kind"] for e in got],
                          ["opening", "booker_decision", "closed", "failure"])
         self.assertEqual((got[1]["decision"], got[1]["opening"]), ("off", got[0]["at"]))
@@ -70,11 +73,11 @@ class MonitorEventsTest(unittest.TestCase):
         self.assertEqual(got[2]["opened"], got[0]["at"])
         self.assertEqual(got[3]["error"], "SchemaChanged")
 
-    def test_other_city_and_slow(self):
+    def test_other_city(self):
         mon, _, _ = make_monitor([colas("colas_cali_real.json")], latencies=[30],
                                  heartbeat_hour=23)
         mon.poll()
-        self.assertEqual(self.kinds(mon), ["other_city", "slow", "booker_decision"])
+        self.assertEqual(self.kinds(mon), ["other_city", "booker_decision"])
 
 
 class ScrubTest(unittest.TestCase):

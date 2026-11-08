@@ -206,10 +206,10 @@ class MonitorTest(unittest.TestCase):
 
     def test_opening_alerts_once_then_realerts_on_schedule(self):
         found = colas("colas_medellin.json")
-        mon, notifier, clock = make_monitor([found] * 20, heartbeat_hour=23)
-        mon.run(budget_seconds=45 * 14)  # polls every 45 s for 630 s
+        mon, notifier, clock = make_monitor([found] * 40, heartbeat_hour=23)
+        mon.run(budget_seconds=600)  # polls every 20 s (Friday) for 600 s
         alerts = self.urgent(notifier)
-        # first alert at ~5 s, realerts once >= 300 s have passed: ~320 s and ~635 s (past budget)
+        # first alert at ~5 s, realerts once >= 300 s have passed: ~305 s and ~605 s (past budget)
         self.assertEqual(len(alerts), 2)
         self.assertIn("HAY CITA", alerts[0].text)
         self.assertIn("Sigue abierta", alerts[1].text)
@@ -218,8 +218,8 @@ class MonitorTest(unittest.TestCase):
 
     def test_realerts_are_capped(self):
         found = colas("colas_medellin.json")
-        mon, notifier, _ = make_monitor([found] * 60, heartbeat_hour=23)
-        mon.run(budget_seconds=45 * 50)
+        mon, notifier, _ = make_monitor([found] * 130, heartbeat_hour=23)
+        mon.run(budget_seconds=2250)
         self.assertEqual(len(self.urgent(notifier)), 1 + mon.settings.max_realerts)
 
     def test_closing_records_history_and_new_opening_alerts_again(self):
@@ -281,40 +281,17 @@ class MonitorTest(unittest.TestCase):
 
 
 class SlowDianTest(unittest.TestCase):
-    def possibles(self, notifier):
-        return [m for m in notifier.sent if "POSIBLE" in m.text]
-
-    def test_slow_answer_sends_one_possible_alert_with_cooldown(self):
+    def test_slow_answer_is_not_a_signal(self):
         none = colas("colas_none.json")
-        mon, notifier, clock = make_monitor([none] * 4, latencies=[2, 25, 30, 22],
-                                            heartbeat_hour=23)
-        mon.poll()                      # 2 s: normal
-        self.assertEqual(self.possibles(notifier), [])
-        mon.poll()                      # 25 s: posible
-        clock.now += timedelta(minutes=10)
-        mon.poll()                      # still slow, inside the 30 min cooldown
-        self.assertEqual(len(self.possibles(notifier)), 1)
-        self.assertIn("25 s", self.possibles(notifier)[0].text)
-        self.assertTrue(self.possibles(notifier)[0].urgent)
-        clock.now += timedelta(minutes=25)
-        mon.poll()                      # cooldown over
-        self.assertEqual(len(self.possibles(notifier)), 2)
-        self.assertEqual(len(mon.state["slow_events"]), 3)
+        mon, notifier, _ = make_monitor([none], latencies=[60], heartbeat_hour=23)
+        mon.poll()
+        self.assertEqual(notifier.sent, [])
 
-    def test_timeout_is_a_possible_and_a_failure(self):
+    def test_timeout_is_only_a_failure(self):
         mon, notifier, _ = make_monitor([TimedOut("no answer")], heartbeat_hour=23)
         mon.poll()
-        self.assertEqual(len(self.possibles(notifier)), 1)
-        self.assertIn("no respondió", notifier.sent[0].text)
+        self.assertEqual(notifier.sent, [])
         self.assertEqual(mon.state["consecutive_failures"], 1)
-
-    def test_no_possible_when_medellin_is_confirmed(self):
-        found = colas("colas_medellin.json")
-        mon, notifier, _ = make_monitor([found, found], latencies=[30, 30], heartbeat_hour=23)
-        mon.poll()
-        mon.poll()
-        self.assertEqual(self.possibles(notifier), [])
-        self.assertEqual(len([m for m in notifier.sent if "HAY CITA" in m.text]), 1)
 
 
 class TelegramTest(unittest.TestCase):
@@ -342,9 +319,14 @@ class TelegramTest(unittest.TestCase):
 class CadenceTest(unittest.TestCase):
     def test_windows(self):
         at = lambda d, h, m=0: datetime(2026, 10, d, h, m, tzinfo=cadence.BOGOTA)  # noqa: E731
-        self.assertEqual(cadence.interval_for(at(23, 9, 30)), 45)   # Friday peak
-        self.assertEqual(cadence.interval_for(at(20, 9)), 50)       # Tuesday morning
-        self.assertEqual(cadence.interval_for(at(19, 15)), 75)      # Monday afternoon
+        self.assertEqual(cadence.interval_for(at(23, 9, 30)), 20)   # Friday peak
+        self.assertEqual(cadence.interval_for(at(23, 7, 53)), 20)   # Friday early opening
+        self.assertEqual(cadence.interval_for(at(23, 13, 0)), 20)   # Friday midday too
+        self.assertEqual(cadence.interval_for(at(23, 17, 30)), 75)  # Friday after 17:00
+        self.assertEqual(cadence.interval_for(at(20, 9)), 35)       # Tuesday morning
+        self.assertEqual(cadence.interval_for(at(19, 15)), 35)      # Monday afternoon
+        self.assertEqual(cadence.interval_for(at(22, 7, 0)), 35)    # Thursday 7:00
+        self.assertEqual(cadence.interval_for(at(19, 17, 30)), 75)  # Monday after 17:00
         self.assertEqual(cadence.interval_for(at(19, 20)), 300)     # weekday evening
         self.assertEqual(cadence.interval_for(at(25, 11)), 900)     # Sunday
 

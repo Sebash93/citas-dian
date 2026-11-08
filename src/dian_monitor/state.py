@@ -20,12 +20,12 @@ def empty():
         "errors_today": 0,
         "today": None,
         "last_check_at": None,
-        "last_possible_at": None,
-        "slow_events": [],
+        # Tramites open in other cities at the last check.
+        "last_other_cities": [],
         # open_since of the opening for which "a booking is already recorded" was sent.
         "booked_notice_for": None,
         # Last booker decision ("running: GitHub run 1 in_progress"...); logged only on change.
-        "booker_decision": None,          # [{"at": iso, "seconds": float, "timed_out": bool}]
+        "booker_decision": None,
         "history": [],              # [{"opened": iso, "closed": iso|None, "matches": [...]}]
     }
 
@@ -43,7 +43,6 @@ def load(path):
 
 def save(path, state):
     state["history"] = state["history"][-MAX_HISTORY:]
-    state["slow_events"] = state["slow_events"][-MAX_HISTORY:]
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:

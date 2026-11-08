@@ -27,8 +27,8 @@ something: alert after 3 in a row) or `Blocked` (403/429: stop and pause 10, 20,
 
 | When | Every |
 |---|---|
-| Fri 8:30–12:30, 14:00–17:00 | ~45 s |
-| Tue/Wed 8:00–12:00 | ~50 s |
+| Fri 6:30–17:00 | ~20 s |
+| Mon–Thu 7:00–17:00 | ~35 s |
 | Weekdays 7:00–19:00 | ~75 s |
 | Weekdays 6–7, 19–21 | 5 min |
 | Nights, weekends | 15 min |
@@ -96,14 +96,18 @@ The repo must be public for unlimited free Actions minutes. Logs contain no pers
 
 ## Booker (optional)
 
-When Medellín opens (or DIAN gets slow, a "posible" alert), the monitor starts the booker.
+When Medellín opens, the monitor starts the booker. It also starts one silently when another
+city opens, because DIAN releases cities in waves: for up to 12 minutes the booker checks for
+Medellín about every 25 s and sends you nothing unless Medellín appears. It never books another
+city (`DIAN_BOOKER_ON_OTHER_CITY=0` turns this off).
 On Render (`DIAN_BOOKER_REPO` set), it dispatches `booker.yml` through the GitHub API; the
 run usually starts within seconds. In GitHub's fallback `monitor.yml`, it runs
 `python -m dian_booker` on the same runner. Either way:
 
 1. It sets up a phone-sized virtual screen (Xvfb → x11vnc → noVNC) behind a Cloudflare quick
    tunnel and opens Chrome on the screen.
-2. It sends **"PREPÁRATE"** with the link right away, so you can open it while the bot works.
+2. It sends **"PREPÁRATE"** with the link as soon as the tunnel is up, so you can open it
+   while the bot works. The wizard doesn't wait for the tunnel.
 3. It goes through Persona Natural → Videoatención → Devoluciones → Medellín, then picks the
    earliest date and time and your document type. Each step takes 5–10 s when slots are open.
 4. It sends **"TOCA EL CAPTCHA"**. You tap "No soy un robot" in the live view.
@@ -157,7 +161,7 @@ The monitor and the booker append JSON lines to `state/events.jsonl` (on Render,
 `/var/data/state/events.jsonl`), which persists with the state. A booker started from Render
 writes its own log, uploaded as `booker-events-<run_id>`. They write:
 - one summary per run: checks, failures, slowest answer, and how the run ended;
-- every opening and closing, failure, block, slow DIAN answer, and opening in another city;
+- every opening and closing, failure, block, and opening in another city;
 - for each booker attempt: when each stage was reached, how long each DIAN wizard step took,
   how long the captcha waited, and the result.
 

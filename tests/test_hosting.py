@@ -72,7 +72,7 @@ class ForeverTest(unittest.TestCase):
         mon.run_forever(max_runs=3)
         runs = [e for e in events.read(mon.settings.events_file) if e["kind"] == "run"]
         self.assertEqual(len(runs), 3)
-        # 45 s cadence on Friday morning: ~40 checks in 30 min, with no gap between runs.
+        # 20 s cadence on Friday morning: ~90 checks in 30 min, with no gap between runs.
         self.assertGreaterEqual(sum(r["checks"] for r in runs), 38)
         self.assertGreater(len(health.pings), 20)
 
@@ -138,7 +138,7 @@ class GitHubBookerTest(unittest.TestCase):
     def test_active_run_blocks_a_second_dispatch(self):
         gh = FakeGitHub(runs=["completed", "in_progress"])
         b, _ = self.booker(gh)
-        self.assertFalse(b.start("posible"))
+        self.assertFalse(b.start("watch"))
         self.assertNotIn("POST", [c[0] for c in gh.calls])
 
     def test_booked_reads_the_artifact_every_time(self):

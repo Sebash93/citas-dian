@@ -2,14 +2,17 @@ import json
 import os
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from dataclasses import replace
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from dian_booker import booker  # noqa: E402
+from dian_booker import booker, remote  # noqa: E402
 from dian_booker.profile import Profile, ProfileError  # noqa: E402
-from dian_booker.remote import novnc_url, tunnel_url_in  # noqa: E402
+from dian_booker.remote import RemoteDisplay, novnc_url, tunnel_url_in  # noqa: E402
 from dian_booker.wizard import (CityMismatch, PageUnresponsive, Wizard,  # noqa: E402
                                 choose_option, choose_service, is_unresponsive, mentions_city)
 from dian_monitor import events  # noqa: E402
@@ -162,6 +165,117 @@ class SafetyStopTest(unittest.TestCase):
             os.environ.update(old)
 
 
+class FakeDisplay:
+    """A tunnel that stays down until the test lets it come up."""
+    env = {}
+
+    def __init__(self, error=None):
+        self.up = threading.Event()
+        self.error = error
+
+    def url(self):
+        self.up.wait(5)
+        if self.error:
+            raise self.error
+        return "https://x.trycloudflare.com/vnc.html"
+
+
+class LinkOrderTest(unittest.TestCase):
+    def attempt(self, trigger, display, service="Medellín “Solicitud…”."):
+        tmp = tempfile.mkdtemp()
+        settings = replace(Settings(), booking_file=os.path.join(tmp, "booking.json"),
+                           events_file=os.path.join(tmp, "events.jsonl"))
+        notifier = ConsoleNotifier()
+        b = booker.Booker(settings, Profile.from_env(ENV), notifier, trigger=trigger,
+                          shots_dir=os.path.join(tmp, "shots"))
+        seen = {}
+
+        class FakeWizard:
+            unresponsive = False
+            chosen = {"servicio": service}
+
+            def __init__(self, *args):
+                pass
+
+            def wait_for_service(self, deadline):
+                seen["wizard_started_before_tunnel"] = not display.up.is_set()
+                display.up.set()
+                return service
+
+            def pick_slot(self):
+                pass
+
+            def before_captcha(self, profile):
+                pass
+
+            def wait_captcha(self, deadline):
+                return False
+
+        with mock.patch.object(booker, "Wizard", FakeWizard):
+            b.captcha_minutes = 0
+            result = b._attempt(None, display, time.monotonic())
+        return result, seen, [m.text for m in notifier.sent]
+
+    def test_wizard_does_not_wait_for_the_tunnel_and_messages_stay_in_order(self):
+        result, seen, texts = self.attempt("found", FakeDisplay())
+        self.assertTrue(seen["wizard_started_before_tunnel"])
+        self.assertEqual(result, booker.CAPTCHA_TIMEOUT)
+        self.assertIn("PREPÁRATE", texts[0])
+        self.assertIn("TOCA EL CAPTCHA", texts[1])
+
+    def test_watch_sends_the_link_only_when_medellin_appears(self):
+        display = FakeDisplay()
+        display.up.set()
+        tmp = tempfile.mkdtemp()
+        settings = replace(Settings(), events_file=os.path.join(tmp, "events.jsonl"))
+        notifier = ConsoleNotifier()
+        b = booker.Booker(settings, Profile.from_env(ENV), notifier, trigger="watch")
+
+        class NotOffered:
+            unresponsive = False
+
+            def __init__(self, *args):
+                pass
+
+            def wait_for_service(self, deadline):
+                return None
+
+        with mock.patch.object(booker, "Wizard", NotOffered):
+            self.assertEqual(b._attempt(None, display, time.monotonic()), booker.NOT_OPEN)
+        self.assertEqual(notifier.sent, [])
+
+    def test_a_tunnel_failure_is_reported_at_the_captcha(self):
+        display = FakeDisplay(error=RuntimeError("no tunnel"))
+        result, _, texts = self.attempt("found", display)
+        self.assertEqual(result, booker.FAILED)
+        self.assertIn("no tunnel", texts[-1])
+
+
+class RemoteDisplayStartTest(unittest.TestCase):
+    def display(self):
+        d = RemoteDisplay(412, 900, lambda m: None)
+        self.addCleanup(d._closed.set)
+        return d
+
+    def test_browser_screen_does_not_wait_for_the_install(self):
+        d = self.display()
+        spawned = []
+        d._spawn = lambda cmd, **kw: spawned.append(cmd[0])
+        never_installed = os.path.join(tempfile.mkdtemp(), "not-ready")
+        with mock.patch.dict(os.environ, {"BOOKER_READY_FILE": never_installed}), \
+                mock.patch.object(remote.shutil, "which", return_value="/usr/bin/Xvfb"), \
+                mock.patch.object(remote.os.path, "exists", side_effect=lambda p: p.endswith("X99")):
+            d.__enter__()  # returns even though the packages are not installed
+        self.assertEqual(spawned, ["Xvfb"])
+
+    def test_url_reports_a_background_failure(self):
+        d = self.display()
+        d._start_remote_access = mock.Mock(side_effect=RuntimeError("no x11vnc"))
+        d._expose()
+        with self.assertRaisesRegex(RuntimeError, "no x11vnc"):
+            d.url(timeout=1)
+
+
 class FakeBooker:
     def __init__(self):
         self.started = []
@@ -204,8 +318,8 @@ def make(items, latencies=None, **overrides):
 
 class BookerLaunchTest(unittest.TestCase):
     def test_opening_starts_one_booker_and_run_waits_for_it(self):
-        mon, fake = make([colas("colas_medellin.json")] * 20)
-        mon.run(budget_seconds=45 * 14)
+        mon, fake = make([colas("colas_medellin.json")] * 40)
+        mon.run(budget_seconds=630)
         self.assertEqual(fake.started, ["found"])  # checks while it runs: no second one
         self.assertFalse(fake.busy)                 # run() waited for it
 
@@ -225,15 +339,52 @@ class BookerLaunchTest(unittest.TestCase):
                      if e["kind"] == "booker_decision"]
         self.assertEqual(decisions, [("started", ""), ("running", "fake run")])  # once each
 
-    def test_posible_starts_booker(self):
+    def test_slow_dian_starts_no_booker(self):
         mon, fake = make([colas("colas_none.json")], latencies=[30])
         mon.poll()
-        self.assertEqual(fake.started, ["posible"])
+        self.assertEqual(fake.started, [])
 
-    def test_posible_can_be_turned_off(self):
-        mon, fake = make([colas("colas_none.json")], latencies=[30], booker_on_possible=False)
+    def test_other_city_starts_a_silent_watch(self):
+        mon, fake = make([colas("colas_cali_real.json")])
+        mon.poll()
+        self.assertEqual(fake.started, ["watch"])
+        self.assertEqual(mon.notifier.sent, [])  # never an alert for another city
+
+    def test_city_that_stays_open_starts_only_one_watch(self):
+        cali = colas("colas_cali_real.json")
+        mon, fake = make([cali, cali, colas("colas_none.json"), cali])
+        mon.poll()
+        fake.busy = False  # the watch ended, Cali is still open
+        mon.poll()
+        self.assertEqual(fake.started, ["watch"])
+        mon.poll()         # closed
+        mon.poll()         # open again: a new signal
+        self.assertEqual(fake.started, ["watch", "watch"])
+
+    def test_watch_can_be_turned_off(self):
+        mon, fake = make([colas("colas_cali_real.json")], booker_on_other_city=False)
         mon.poll()
         self.assertEqual(fake.started, [])
+
+    def test_watch_is_silent_after_a_booking(self):
+        mon, fake = make([colas("colas_cali_real.json")])
+        fake.is_booked = True
+        mon.poll()
+        self.assertEqual(fake.started, [])
+        self.assertEqual(mon.notifier.sent, [])
+
+    def test_opening_during_a_watch_is_logged_under_the_opening(self):
+        mon, fake = make([colas("colas_cali_real.json"), colas("colas_cali_real.json"),
+                          colas("colas_medellin.json")])
+        mon.poll()
+        mon.state["last_other_cities"] = []  # a second new tramite while the watch runs
+        mon.poll()                           # decision: running
+        mon.poll()                           # Medellín: same "running", under this opening
+        opening = mon.state["open_since"]
+        self.assertTrue(any(e["kind"] == "booker_decision" and e["opening"] == opening
+                            and e["decision"] == "running"
+                            for e in events.read(mon.settings.events_file)))
+        self.assertEqual(fake.started, ["watch"])
 
     def test_no_booker_after_a_booking_and_it_says_so_once(self):
         mon, fake = make([colas("colas_medellin.json")] * 3)

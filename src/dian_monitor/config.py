@@ -36,17 +36,15 @@ class Settings:
     max_realerts: int = 3
     # Consecutive failed checks before alerting that the bot itself is broken.
     failures_before_alert: int = 3
-    # A colas lookup slower than this (or a timeout) sends a "posible" alert: DIAN slows
-    # down when slots open. Normal is ~1-3 s.
-    slow_seconds: int = 10
-    possible_cooldown_seconds: int = 1800
     # Bogota hour after which the first run of the day sends the "still alive" summary.
     heartbeat_hour: int = 8
     booking_url: str = "https://agendamiento.dian.gov.co/?recurso=CitasDIAN"
-    # Start `python -m dian_booker` on an opening (and, optionally, on a "posible" alert).
-    # The booker stops at the reCAPTCHA and sends a live-browser link for a human to solve it.
+    # Start `python -m dian_booker` on an opening. The booker stops at the reCAPTCHA and sends a
+    # live-browser link for a human to solve it.
     booker: bool = False
-    booker_on_possible: bool = True
+    # Also start it, silently, when another city opens: DIAN releases cities in waves, so it
+    # watches for Medellín for a few minutes. It never books or alerts for the other city.
+    booker_on_other_city: bool = True
     # "owner/repo": start the booker as a GitHub Actions run (booker.yml) instead of a local
     # process. Used when the monitor runs on Render; needs GITHUB_DISPATCH_TOKEN.
     booker_repo: str = ""
@@ -71,12 +69,9 @@ class Settings:
             realert_seconds=int(_env("DIAN_REALERT_SECONDS", cls.realert_seconds)),
             max_realerts=int(_env("DIAN_MAX_REALERTS", cls.max_realerts)),
             failures_before_alert=int(_env("DIAN_FAILURES_BEFORE_ALERT", cls.failures_before_alert)),
-            slow_seconds=int(_env("DIAN_SLOW_SECONDS", cls.slow_seconds)),
-            possible_cooldown_seconds=int(_env("DIAN_POSSIBLE_COOLDOWN_SECONDS",
-                                               cls.possible_cooldown_seconds)),
             heartbeat_hour=int(_env("DIAN_HEARTBEAT_HOUR", cls.heartbeat_hour)),
             booker=_flag("DIAN_BOOKER", cls.booker),
-            booker_on_possible=_flag("DIAN_BOOKER_ON_POSIBLE", cls.booker_on_possible),
+            booker_on_other_city=_flag("DIAN_BOOKER_ON_OTHER_CITY", cls.booker_on_other_city),
             booker_repo=_env("DIAN_BOOKER_REPO", cls.booker_repo),
             booking_file=_env("DIAN_BOOKING_FILE", cls.booking_file),
             events_file=_env("DIAN_EVENTS_FILE", cls.events_file),
