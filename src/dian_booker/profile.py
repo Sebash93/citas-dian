@@ -33,6 +33,23 @@ class Profile:
         return cls(doc_number=doc, full_name=get("BOOKER_FULL_NAME"), email=get("BOOKER_EMAIL"),
                    phone=phone, doc_type=get("BOOKER_DOC_TYPE") or cls.doc_type)
 
+    @classmethod
+    def from_case(cls, case):
+        """The person of one case (cases.find); errors name the case, never a value."""
+        p = case.personal
+        env = {"BOOKER_DOC_NUMBER": p.get("doc_number", ""), "BOOKER_FULL_NAME": p.get("full_name", ""),
+               "BOOKER_EMAIL": p.get("email", ""), "BOOKER_PHONE": p.get("phone", ""),
+               "BOOKER_DOC_TYPE": p.get("doc_type", "")}
+        try:
+            return cls.from_env(env)
+        except ProfileError as e:
+            names = {"BOOKER_DOC_NUMBER": "doc_number", "BOOKER_FULL_NAME": "full_name",
+                     "BOOKER_EMAIL": "email", "BOOKER_PHONE": "phone"}
+            text = str(e)
+            for old, new in names.items():
+                text = text.replace(old, new)
+            raise ProfileError(f"case {case.id!r}: {text}") from None
+
     def scrub(self, text):
         """Mask this person's data (and any live-browser link) in free text such as errors."""
         text = re.sub(r"https://[a-z0-9-]+\.trycloudflare\.com\S*", "<link>", str(text))

@@ -95,9 +95,12 @@ class TelegramNotifier:
         return ok
 
 
-def build_notifier():
+def build_notifier(chat_ids=None):
+    """Telegram to `chat_ids` (default: TELEGRAM_CHAT_ID, comma-separated), else the log."""
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-    chat_ids = [c.strip() for c in os.environ.get("TELEGRAM_CHAT_ID", "").split(",") if c.strip()]
+    if not chat_ids:
+        chat_ids = [c.strip() for c in os.environ.get("TELEGRAM_CHAT_ID", "").split(",")
+                    if c.strip()]
     if token and chat_ids:
         return TelegramNotifier(token, chat_ids)
     print("Telegram not configured (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID): log-only alerts.",
@@ -122,18 +125,21 @@ def find_chat_ids(token):
 
 
 def test_message():
-    return Message("✅ Bot DIAN conectado. Te avisaré aquí apenas haya cita en Medellín.",
+    return Message("✅ Bot DIAN conectado. Te avisaré aquí apenas haya cita.",
                    urgent=True,
                    button=("Abrir agendamiento", "https://agendamiento.dian.gov.co/?recurso=CitasDIAN"))
 
 
 # --- texts ------------------------------------------------------------------
 
-def opening(settings, matches, when, first=True):
-    head = "🚨 HAY CITA EN LA DIAN — MEDELLÍN" if first else "⏰ Sigue abierta la cita en Medellín"
+def opening(settings, city, matches, when, first=True, cases=()):
+    """`city` is the display name (e.g. "Medellín"); `cases` the ids waiting for it."""
+    head = (f"🚨 HAY CITA EN LA DIAN — {city.upper()}" if first
+            else f"⏰ Sigue abierta la cita en {city}")
     lines = "\n".join(f"• {m}" for m in matches)
+    waiting = f"\nCasos: {', '.join(cases)}\n" if cases else ""
     return Message(
-        text=(f"{head}\n\n{settings.label}\n\n{lines}\n\n"
+        text=(f"{head}\n\n{settings.label} / {city}\n\n{lines}\n{waiting}\n"
               "Ruta: Agendar cita → Persona Natural → Videoatención → Devoluciones\n"
               f"Visto: {when:%a %d %b %H:%M:%S} (Bogotá)"),
         urgent=True,
@@ -156,18 +162,25 @@ def booker_unavailable(error):
                    "Si hay una alerta de cita, agenda a mano con su botón.", urgent=True)
 
 
-def booker_skipped_booked():
-    return Message("ℹ️ No arranqué el bot que agenda: ya hay una cita de Medellín registrada. "
-                   "Si no la tienes, borra el registro (artefacto booking-booked en GitHub) "
-                   "para que vuelva a agendar.", urgent=True)
+def booker_skipped_booked(city, artifacts):
+    return Message(f"ℹ️ Abrió {city}, pero ya hay una cita registrada para cada caso de {city}, "
+                   "así que no aviso ni arranco el bot. Si falta alguna, borra su registro "
+                   f"en GitHub ({', '.join(artifacts)}) para que vuelva a agendar.", urgent=True)
 
 
 def recovered():
     return Message("✅ Bot DIAN: las revisiones volvieron a funcionar.")
 
 
-def heartbeat(prev_day, is_open):
+def heartbeat(prev_day, open_cities, watched):
     stats = (f"Ayer ({prev_day['date']}): {prev_day['checks']} revisiones, "
              f"{prev_day['errors']} errores." if prev_day else "Primer día de operación.")
-    status = "Medellín TIENE cupo abierto ahora." if is_open else "Medellín sin cupo por ahora."
-    return Message(f"🟢 Bot DIAN sigue vivo. {stats} {status}")
+    status = (f"Con cupo abierto ahora: {', '.join(open_cities)}." if open_cities
+              else "Sin cupo por ahora.")
+    return Message(f"🟢 Bot DIAN sigue vivo. Vigilo: {', '.join(watched) or 'nada'}. "
+                   f"{stats} {status}")
+
+
+def cases_problem(error):
+    return Message(f"⚠️ Bot DIAN: el JSON de casos tiene un problema ({error}). "
+                   "No estoy vigilando hasta que lo corrijas.", urgent=True)

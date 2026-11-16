@@ -104,22 +104,25 @@ def report(events, since=None):
     for e in by_kind.get("blocked", []):
         out.append(f"  blocked {e['t']}: pause {e.get('pause_min')} min")
 
-    out.append(f"\nOpenings (target city): {len(by_kind.get('opening', []))}")
-    closes = {e.get("opened"): e for e in by_kind.get("closed", [])}
+    # Events from before cases carry no city: they were all Medellín.
+    city = lambda e: e.get("city") or "medellin"  # noqa: E731
+    out.append(f"\nOpenings (watched cities): {len(by_kind.get('opening', []))}")
+    closes = {(city(e), e.get("opened")): e for e in by_kind.get("closed", [])}
     decisions = {}
     for d in by_kind.get("booker_decision", []):
-        decisions.setdefault(d.get("opening"), []).append(d)
+        decisions.setdefault((city(d), d.get("opening")), []).append(d)
     for e in by_kind.get("opening", []):
-        c = closes.get(e["t"])
+        c = closes.get((city(e), e["t"]))
         dur = f"open {c['minutes']:.0f} min" if c else "close not seen"
-        out.append(f"  {e['t']}  {dur}  {e.get('matches')}")
-        # What the booker did during this opening; "NO BOOKER" flags the ones to look into.
-        steps = decisions.get(e["t"], [])
+        out.append(f"  {e['t']}  {city(e)}  {dur}  {e.get('matches')}")
+        # What the bookers did during this opening; "NO BOOKER" flags the ones to look into.
+        steps = decisions.get((city(e), e["t"]), [])
         if not any(d.get("decision") in ("started", "running") for d in steps):
             out.append("    NO BOOKER during this opening")
         for d in steps:
             detail = f" ({d['detail']})" if d.get("detail") else ""
-            out.append(f"    {d['t'][11:19]} booker {d.get('decision')}{detail}")
+            case = f" {d['case']}" if d.get("case") else ""
+            out.append(f"    {d['t'][11:19]} booker{case} {d.get('decision')}{detail}")
     others = by_kind.get("other_city", [])
     if others:
         out.append(f"Openings elsewhere: {len(others)} (last {others[-1]['t']}: {others[-1].get('names')})")
@@ -127,7 +130,7 @@ def report(events, since=None):
     attempts = by_kind.get("booker_end", [])
     out.append(f"\nBooker attempts: {len(attempts)}")
     for e in attempts:
-        out.append(f"  {e['t']}  {e.get('trigger')}  → {e.get('result')}"
+        out.append(f"  {e['t']}  {e.get('case') or 'default'} {e.get('trigger')}  → {e.get('result')}"
                    f"{' at ' + e['stage'] if e.get('result') == 'FAILED' else ''}"
                    f"  ({e.get('seconds', 0):.0f} s){'  ' + e['error'] if e.get('error') else ''}")
     stages = {}

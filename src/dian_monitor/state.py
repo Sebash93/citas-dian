@@ -7,10 +7,9 @@ MAX_HISTORY = 500
 
 def empty():
     return {
-        "open_since": None,         # ISO time the current Medellin opening was first seen
-        "open_matches": [],
-        "alerts_for_opening": 0,
-        "last_alert_at": None,
+        # Open watched cities: {city: {"since": iso, "matches": [...], "alerts": n,
+        #                              "last_alert_at": iso, "booked_notice": bool}}
+        "openings": {},
         "consecutive_failures": 0,
         "failure_alert_sent": False,
         "blocks": 0,
@@ -20,13 +19,15 @@ def empty():
         "errors_today": 0,
         "today": None,
         "last_check_at": None,
-        # Tramites open in other cities at the last check.
+        # Tramites open in unwatched cities at the last check (logged on change).
         "last_other_cities": [],
-        # open_since of the opening for which "a booking is already recorded" was sent.
-        "booked_notice_for": None,
-        # Last booker decision ("running: GitHub run 1 in_progress"...); logged only on change.
-        "booker_decision": None,
-        "history": [],              # [{"opened": iso, "closed": iso|None, "matches": [...]}]
+        # Every tramite open at the last check: a new one starts "watch" bookers.
+        "last_open": [],
+        # Last booker decision per case id ("running: GitHub run 1 in_progress"...); logged
+        # only on change.
+        "booker_decisions": {},
+        # [{"city": c, "opened": iso, "closed": iso|None, "matches": [...]}]
+        "history": [],
     }
 
 
@@ -37,8 +38,34 @@ def load(path):
     except (OSError, ValueError):
         return empty()
     state = empty()
-    state.update(stored)
+    state.update(_migrate(stored))
     return state
+
+
+LEGACY_KEYS = ("open_since", "open_matches", "alerts_for_opening", "last_alert_at",
+               "booked_notice_for", "booker_decision")
+
+
+def _migrate(stored):
+    """State from before cases had one Medellín opening at the top level."""
+    if "openings" in stored or not isinstance(stored, dict):
+        return stored
+    stored = dict(stored)
+    openings = {}
+    if stored.get("open_since"):
+        openings["medellin"] = {
+            "since": stored["open_since"], "matches": stored.get("open_matches") or [],
+            "alerts": stored.get("alerts_for_opening") or 0,
+            "last_alert_at": stored.get("last_alert_at"),
+            "booked_notice": stored.get("booked_notice_for") == stored["open_since"]}
+    stored["last_open"] = (stored.get("open_matches") or []) + (stored.get("last_other_cities")
+                                                                 or [])
+    for entry in stored.get("history") or []:
+        entry.setdefault("city", "medellin")
+    for key in LEGACY_KEYS:
+        stored.pop(key, None)
+    stored["openings"] = openings
+    return stored
 
 
 def save(path, state):

@@ -307,7 +307,7 @@ class TelegramTest(unittest.TestCase):
 
         session = Session()
         tg = notify.TelegramNotifier("TOKEN", ["111", "-222"], session=session)
-        msg = notify.opening(Settings(), ["Medellín devoluciones"], FRIDAY)
+        msg = notify.opening(Settings(), "Medellín", ["Medellín devoluciones"], FRIDAY)
         self.assertTrue(tg.send(msg))
         self.assertEqual([c[1]["chat_id"] for c in session.calls], ["111", "-222"])
         payload = session.calls[0][1]

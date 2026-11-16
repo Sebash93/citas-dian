@@ -4,10 +4,11 @@ import os
 from datetime import timedelta
 
 from . import cadence, events
+from .cases import CasesError, load as load_cases
 
 from .config import Settings
 from .monitor import Monitor, log
-from .notify import build_notifier, find_chat_ids, test_message
+from .notify import build_notifier, cases_problem, find_chat_ids, test_message
 
 
 def main(argv=None):
@@ -50,8 +51,16 @@ def main(argv=None):
         return 0 if build_notifier().send(test_message()) else 1
 
     settings = Settings.from_env()
-    log(f"Watching: {settings.label}")
-    monitor = Monitor(settings, build_notifier())
+    notifier = build_notifier()
+    try:
+        cases = [c for c in load_cases(settings) if c.enabled]
+    except CasesError as e:
+        log(f"Not starting: {e}.")
+        notifier.send(cases_problem(e))
+        return 2
+    watched = ", ".join(f"{c.city_name} [{c.id}]" for c in cases) or "no enabled case"
+    log(f"Watching: {settings.label} / {watched}")
+    monitor = Monitor(settings, notifier, cases=cases)
     if args.forever:
         monitor.run_forever()
         return 0
