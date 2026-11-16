@@ -9,6 +9,7 @@ import traceback
 from datetime import datetime, timedelta
 
 from . import cadence, notify
+from . import cases as cases_mod
 from .events import EventLog, percentile
 from .health import Health
 from . import state as state_mod
@@ -41,31 +42,40 @@ def already_booked(path):
 
 
 class BookerProcess:
-    """Runs `python -m dian_booker --trigger <why>` beside the monitor, one at a time."""
+    """Runs `python -m dian_booker --case <id> --trigger <why>` beside the monitor. One at a
+    time: every booker uses the same local display and Chrome debugging port."""
 
-    def __init__(self, booking_file):
-        self.booking_file = booking_file
-        self.proc = None
+    capacity = 1
 
-    def booked(self):
-        return already_booked(self.booking_file)
+    def __init__(self, settings):
+        self.settings = settings
+        self.procs = {}  # case id -> Popen
 
-    def running(self):
-        return self.proc is not None and self.proc.poll() is None
+    def booked(self, case):
+        return already_booked(cases_mod.booking_file(self.settings, case.id))
 
-    def start(self, trigger):
-        if self.running():
+    def running(self, case):
+        proc = self.procs.get(case.id)
+        return proc is not None and proc.poll() is None
+
+    def active(self):
+        return sum(1 for p in self.procs.values() if p.poll() is None)
+
+    def start(self, case, trigger):
+        if self.running(case):
             return False
-        self.proc = subprocess.Popen([sys.executable, "-m", "dian_booker", "--trigger", trigger])
+        self.procs[case.id] = subprocess.Popen([sys.executable, "-m", "dian_booker",
+                                                "--trigger", trigger, "--case", case.id])
         return True
 
     def wait(self):
-        if self.running():
-            log("Waiting for the booker to finish before ending the run.")
-            self.proc.wait()
+        for proc in self.procs.values():
+            if proc.poll() is None:
+                log("Waiting for the booker to finish before ending the run.")
+                proc.wait()
 
-    def describe(self):
-        return f"local process {self.proc.pid}" if self.running() else "not running"
+    def describe(self, case):
+        return f"local process {self.procs[case.id].pid}" if self.running(case) else "not running"
 
 
 def build_booker(settings):
@@ -73,14 +83,19 @@ def build_booker(settings):
         return None
     if settings.booker_repo:
         from .remote_booker import GitHubBooker
-        return GitHubBooker(settings.booker_repo, os.environ.get("GITHUB_DISPATCH_TOKEN", "").strip())
-    return BookerProcess(settings.booking_file)
+        return GitHubBooker(settings.booker_repo, os.environ.get("GITHUB_DISPATCH_TOKEN", "").strip(),
+                            capacity=settings.max_parallel_bookers)
+    return BookerProcess(settings)
 
 
 class Monitor:
     def __init__(self, settings, notifier, client=None, clock=cadence.now_bogota,
-                 sleep=time.sleep, rand=random.uniform, booker=None, health=None):
+                 sleep=time.sleep, rand=random.uniform, booker=None, health=None, cases=None):
         self.settings = settings
+        # Routing fields only: the monitor never holds anyone's personal data.
+        self.cases = [c for c in (cases if cases is not None else cases_mod.load(settings))
+                      if c.enabled]
+        self.cities = sorted({c.city for c in self.cases})
         self.notifier = notifier
         self.client = client or DianClient()
         self.clock = clock
@@ -91,6 +106,10 @@ class Monitor:
         self.state = state_mod.load(settings.state_file)
         self.events = EventLog(settings.events_file, clock, "monitor")
         self.stats = {"checks": 0, "errors": 0, "latencies": [], "statuses": {}}
+        self._booked = {}  # case id -> booked(), cached for one check
+
+    def cases_in(self, city):
+        return [c for c in self.cases if c.city == city]
 
     # --- bookkeeping -------------------------------------------------------
 
@@ -109,8 +128,10 @@ class Monitor:
     def _maybe_heartbeat(self, now):
         today = now.date().isoformat()
         if self.state["last_heartbeat_date"] != today and now.hour >= self.settings.heartbeat_hour:
-            self.notifier.send(notify.heartbeat(self.state.get("prev_day"),
-                                                bool(self.state["open_since"])))
+            self.notifier.send(notify.heartbeat(
+                self.state.get("prev_day"),
+                [cases_mod.city_name(c) for c in self.state["openings"]],
+                [cases_mod.city_name(c) for c in self.cities]))
             self.state["last_heartbeat_date"] = today
 
     def _capture(self, now, data, tag):
@@ -120,43 +141,63 @@ class Monitor:
             json.dump(data, f, ensure_ascii=False, indent=2)
         log(f"Saved raw response to {path}")
 
-    def _maybe_book(self, trigger):
-        """Make sure a booker is running, and record why not when it isn't.
+    def _maybe_book(self, case, trigger):
+        """Make sure a booker is running for this case, and record why not when it isn't.
 
-        Called on every check while Medellín is open (and when another city opens), so a booker
-        that ended, failed or never started is replaced within one check. Each change of
-        decision is logged and emitted as `booker_decision`, so an opening without a booker
-        can always be explained from the log.
+        Called on every check while the case's city is open (and when a new tramite opens
+        anywhere, as a silent "watch"), so a booker that ended, failed or never started is
+        replaced within one check. Each change of decision is logged and emitted as
+        `booker_decision`, so an opening without a booker can always be explained from the log.
         """
-        kind, detail = self._try_booker(trigger)
+        kind, detail = self._try_booker(case, trigger)
         decision = f"{kind}: {detail}" if detail else kind
-        if kind == "started" or decision != self.state["booker_decision"]:
-            log(f"Booker ({trigger}): {decision}")
-            self.events.emit("booker_decision", trigger=trigger, decision=kind,
-                             detail=detail[:300], opening=self.state["open_since"])
+        decisions = self.state["booker_decisions"]
+        if kind == "started" or decision != decisions.get(case.id):
+            log(f"Booker {case.id} ({trigger}): {decision}")
+            opening = self.state["openings"].get(case.city)
+            self.events.emit("booker_decision", trigger=trigger, case=case.id, city=case.city,
+                             decision=kind, detail=detail[:300],
+                             opening=opening["since"] if opening else None)
             if kind == "error":
                 self.notifier.send(notify.booker_unavailable(detail))
-        self.state["booker_decision"] = decision
+        decisions[case.id] = decision
 
-    def _try_booker(self, trigger):
-        """(kind, detail): off, booked, started, running or error. Never raises."""
+    def _is_booked(self, case):
+        if case.id not in self._booked:
+            self._booked[case.id] = self.booker.booked(case)
+        return self._booked[case.id]
+
+    def _try_booker(self, case, trigger):
+        """(kind, detail): off, booked, running, waiting, started or error. Never raises."""
         if self.booker is None:
             return "off", "DIAN_BOOKER is not 1"
         try:
-            if self.booker.booked():
-                if trigger == "found":  # a watch is silent: nothing is open in Medellín
-                    self._notify_booked_once()
-                return "booked", "a Medellín booking is recorded"
-            if self.booker.start(trigger):
+            if self._is_booked(case):
+                return "booked", f"a {case.city_name} booking is recorded for this case"
+            if self.booker.running(case):
+                return "running", self.booker.describe(case)
+            active, capacity = self.booker.active(), self.booker.capacity
+            if active >= capacity:
+                return "waiting", f"{active} bookers running (max {capacity})"
+            if self.booker.start(case, trigger):
                 return "started", ""
-            return "running", self.booker.describe()
+            return "running", self.booker.describe(case)
         except Exception as e:  # noqa: BLE001 - a booker problem must not stop monitoring
             return "error", str(e)
 
-    def _notify_booked_once(self):
-        if self.state["booked_notice_for"] != self.state["open_since"]:
-            self.notifier.send(notify.booker_skipped_booked())
-            self.state["booked_notice_for"] = self.state["open_since"]
+    def _waiting_cases(self, city):
+        """Cases of this city without a recorded booking (all of them if that is unknown)."""
+        if self.booker is None:
+            return self.cases_in(city)
+        waiting = []
+        for case in self.cases_in(city):
+            try:
+                if self._is_booked(case):
+                    continue
+            except Exception:  # noqa: BLE001 - unknown counts as not booked; _try_booker says why
+                pass
+            waiting.append(case)
+        return waiting
 
     # --- outcomes ----------------------------------------------------------
 
@@ -195,62 +236,88 @@ class Monitor:
             self.state["failure_alert_sent"] = True
 
     def _on_other_cities(self, now, result):
-        """Log every change, and start a silent "watch" booker when a tramite appears that was
-        not open at the last check: DIAN releases cities in waves, so Medellín may be next.
-        Never an alert: the booker sends the link only if Medellín itself shows up."""
+        """Log every change of what is open in unwatched cities (never an alert)."""
         st = self.state
         previous = st["last_other_cities"]
         st["last_other_cities"] = result.other_cities
         if result.other_cities and result.other_cities != previous:
             log(f"Open elsewhere (not alerting): {result.other_cities}")
             self.events.emit("other_city", names=result.other_cities)
-            if result.status != FOUND:  # a Medellín response is captured as such below
+            if result.status != FOUND:  # a response with a watched city is captured as such
                 self._capture(now, result.raw, "other-city")
-        if (result.status != FOUND and self.settings.booker_on_other_city
-                and set(result.other_cities) - set(previous)):
-            self._maybe_book("watch")
 
     def _on_result(self, now, result):
         st = self.state
         self._on_other_cities(now, result)
-        if result.status != FOUND:
-            if st["open_since"]:
-                log(f"Medellín opening closed (open since {st['open_since']}).")
-                opened = _parse(st["open_since"])
-                self.events.emit("closed", opened=st["open_since"],
-                                 minutes=round((now - opened).total_seconds() / 60, 1))
-                for entry in reversed(st["history"]):
-                    if entry["closed"] is None:
-                        entry["closed"] = _iso(now)
-                        break
-                st.update(open_since=None, open_matches=[], alerts_for_opening=0,
-                          booker_decision=None)
-            return
+        open_now = result.matches + result.other_cities
+        new = set(open_now) - set(st["last_open"])
+        st["last_open"] = open_now
+        for city in self.cities:
+            if city in result.by_city:
+                self._on_city_open(now, city, result.by_city[city], result.raw)
+            else:
+                self._on_city_closed(now, city)
+        # DIAN releases cities in waves: a tramite that was not open at the last check starts a
+        # silent "watch" booker for each case whose city is not open. It sends the link only if
+        # its own city shows up, and a city that stays open can't keep bookers running.
+        if new and self.settings.booker_on_other_city:
+            for case in self.cases:
+                if case.city not in result.by_city:
+                    self._maybe_book(case, "watch")
 
-        changed = result.matches != st["open_matches"]
-        if not st["open_since"] or changed:
-            if not st["open_since"]:
-                st["open_since"] = _iso(now)
-                st["history"].append({"opened": _iso(now), "closed": None,
-                                      "matches": result.matches})
-                self.events.emit("opening", at=_iso(now), matches=result.matches,
+    def _on_city_closed(self, now, city):
+        st = self.state
+        opening = st["openings"].pop(city, None)
+        if opening is None:
+            return
+        log(f"{cases_mod.city_name(city)} opening closed (open since {opening['since']}).")
+        opened = _parse(opening["since"])
+        self.events.emit("closed", city=city, opened=opening["since"],
+                         minutes=round((now - opened).total_seconds() / 60, 1))
+        for entry in reversed(st["history"]):
+            if entry.get("city") == city and entry["closed"] is None:
+                entry["closed"] = _iso(now)
+                break
+        for case in self.cases_in(city):
+            st["booker_decisions"].pop(case.id, None)
+
+    def _on_city_open(self, now, city, matches, raw):
+        st = self.state
+        opening = st["openings"].get(city)
+        name = cases_mod.city_name(city)
+        if opening is None or matches != opening["matches"]:
+            if opening is None:
+                opening = {"since": _iso(now), "matches": matches, "alerts": 0,
+                           "last_alert_at": None, "booked_notice": False}
+                st["openings"][city] = opening
+                st["history"].append({"city": city, "opened": _iso(now), "closed": None,
+                                      "matches": matches})
+                self.events.emit("opening", city=city, at=_iso(now), matches=matches,
                                  latency=self.client.last_latency)
                 # A watch may already be running: log it again under this opening.
-                st["booker_decision"] = None
-            st.update(open_matches=result.matches, alerts_for_opening=0)
-            self._capture(now, result.raw, "medellin")
-            first = True
+                for case in self.cases_in(city):
+                    st["booker_decisions"].pop(case.id, None)
+            opening.update(matches=matches, alerts=0)
+            self._capture(now, raw, city)
+            alert, first = True, True
         else:
-            last = _parse(st["last_alert_at"])
+            last = _parse(opening["last_alert_at"])
             due = last is None or (now - last).total_seconds() >= self.settings.realert_seconds
-            if not due or st["alerts_for_opening"] > self.settings.max_realerts:
-                self._maybe_book("found")  # no alert due, but keep a booker going
-                return
+            alert = due and opening["alerts"] <= self.settings.max_realerts
             first = False
-        self.notifier.send(notify.opening(self.settings, result.matches, now, first=first))
-        st["alerts_for_opening"] += 1
-        st["last_alert_at"] = _iso(now)
-        self._maybe_book("found")  # also on every later check while the opening lasts
+        waiting = self._waiting_cases(city)
+        if alert and waiting:
+            self.notifier.send(notify.opening(self.settings, name, matches, now, first=first,
+                                              cases=[c.id for c in waiting
+                                                     if c.id != cases_mod.DEFAULT_ID]))
+            opening["alerts"] += 1
+            opening["last_alert_at"] = _iso(now)
+        elif not waiting and not opening["booked_notice"]:
+            self.notifier.send(notify.booker_skipped_booked(
+                name, [cases_mod.booked_artifact(c.id) for c in self.cases_in(city)]))
+            opening["booked_notice"] = True
+        for case in self.cases_in(city):  # on every check while the opening lasts
+            self._maybe_book(case, "found")
 
     # --- loop --------------------------------------------------------------
 
@@ -262,9 +329,10 @@ class Monitor:
         self.state["last_check_at"] = _iso(now)
         self.stats["checks"] += 1
         s = self.settings
+        self._booked = {}
         try:
             result = evaluate(self.client.find_colas(s.tipo_persona, s.categoria, s.tipo_atencion),
-                              s.city)
+                              self.cities)
         except Blocked as e:
             self._on_blocked(now, e)
             self._save()
@@ -368,4 +436,4 @@ class Monitor:
             return "MONITOR_BLOCKED"
         if self.state["consecutive_failures"]:
             return "MONITOR_ERROR"
-        return "MONITOR_OK_FOUND" if self.state["open_since"] else "MONITOR_OK_NONE"
+        return "MONITOR_OK_FOUND" if self.state["openings"] else "MONITOR_OK_NONE"

@@ -10,6 +10,7 @@ from datetime import timedelta
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from dian_monitor import events  # noqa: E402
+from dian_monitor.cases import Case  # noqa: E402
 from dian_monitor.client import Blocked  # noqa: E402
 from dian_monitor.config import Settings  # noqa: E402
 from dian_monitor.health import Health  # noqa: E402
@@ -19,6 +20,8 @@ from dian_monitor.remote_booker import DispatchError, GitHubBooker  # noqa: E402
 from test_monitor import FRIDAY, Clock, FakeClient, FakeResponse, colas  # noqa: E402
 
 TOKEN = "github_pat_SECRET"
+DEFAULT = Case("default", "medellin")
+CALI = Case("cali-1", "cali")
 
 
 class FakeHealth:
@@ -33,7 +36,7 @@ class FakeGitHub:
     """Answers the three GitHub API calls the booker dispatcher makes."""
 
     def __init__(self, artifacts=0, runs=(), dispatch_status=204):
-        self.artifacts = artifacts
+        self.artifacts = artifacts  # a count for any name, or {name: count}
         self.runs = list(runs)
         self.dispatch_status = dispatch_status
         self.calls = []
@@ -41,9 +44,13 @@ class FakeGitHub:
     def request(self, method, url, timeout, headers, **kwargs):
         self.calls.append((method, url, kwargs))
         if url.endswith("/artifacts"):
-            return FakeResponse(body={"total_count": self.artifacts})
-        if url.endswith("/runs"):
-            return FakeResponse(body={"workflow_runs": [{"status": s} for s in self.runs]})
+            count = (self.artifacts.get(kwargs["params"]["name"], 0)
+                     if isinstance(self.artifacts, dict) else self.artifacts)
+            return FakeResponse(body={"total_count": count})
+        if url.endswith("/runs"):  # a run is a status, or (status, title)
+            runs = [{"status": r} if isinstance(r, str) else {"status": r[0], "display_title": r[1]}
+                    for r in self.runs]
+            return FakeResponse(body={"workflow_runs": runs})
         if self.dispatch_status == 204:
             return FakeResponse(status=204)
         return FakeResponse(status=self.dispatch_status, body={"message": "Bad credentials"})
@@ -126,27 +133,42 @@ class GitHubBookerTest(unittest.TestCase):
     def test_dispatches_with_trigger_and_counts_as_running_meanwhile(self):
         gh = FakeGitHub()
         b, t = self.booker(gh)
-        self.assertTrue(b.start("found"))
+        self.assertTrue(b.start(DEFAULT, "found"))
         method, url, kwargs = gh.calls[-1]
         self.assertEqual(method, "POST")
         self.assertTrue(url.endswith("/repos/me/repo/actions/workflows/booker.yml/dispatches"))
-        self.assertEqual(kwargs["json"], {"ref": "main", "inputs": {"trigger": "found"}})
-        self.assertFalse(b.start("found"))  # not visible in the API yet, still "running"
+        self.assertEqual(kwargs["json"], {"ref": "main",
+                                          "inputs": {"trigger": "found", "case": "default"}})
+        self.assertFalse(b.start(DEFAULT, "found"))  # not visible in the API yet, still "running"
+        self.assertEqual(b.active(), 1)
         t[0] = 120
-        self.assertTrue(b.start("found"))
+        self.assertTrue(b.start(DEFAULT, "found"))
 
     def test_active_run_blocks_a_second_dispatch(self):
         gh = FakeGitHub(runs=["completed", "in_progress"])
         b, _ = self.booker(gh)
-        self.assertFalse(b.start("watch"))
+        self.assertFalse(b.start(DEFAULT, "watch"))  # an old run, titled just "Booker"
         self.assertNotIn("POST", [c[0] for c in gh.calls])
 
+    def test_runs_are_matched_to_their_case_by_title(self):
+        gh = FakeGitHub(runs=[("in_progress", "Booker cali-1 found"), ("completed", "Booker med-1 watch")])
+        b, t = self.booker(gh)
+        self.assertTrue(b.running(CALI))
+        self.assertEqual(b.describe(CALI), "GitHub run None in_progress")
+        self.assertFalse(b.start(CALI, "found"))
+        self.assertTrue(b.start(Case("med-1", "medellin"), "found"))
+        self.assertEqual(gh.calls[-1][2]["json"]["inputs"], {"trigger": "found", "case": "med-1"})
+        self.assertEqual(b.active(), 2)  # cali-1's run plus med-1's dispatch
+        runs_calls = [c for c in gh.calls if c[1].endswith("/runs")]
+        self.assertEqual(len(runs_calls), 1)  # one listing serves every case in a check
+
     def test_booked_reads_the_artifact_every_time(self):
-        gh = FakeGitHub(artifacts=1)
+        gh = FakeGitHub(artifacts={"booking-booked-cali-1": 1})
         b, _ = self.booker(gh)
-        self.assertTrue(b.booked())
-        gh.artifacts = 0  # artifact deleted on GitHub: booking is re-enabled at once
-        self.assertFalse(b.booked())
+        self.assertTrue(b.booked(CALI))
+        self.assertFalse(b.booked(DEFAULT))  # each case has its own artifact
+        gh.artifacts = {}  # artifact deleted on GitHub: booking is re-enabled at once
+        self.assertFalse(b.booked(CALI))
 
     def test_booked_artifact_stops_the_monitor_from_dispatching(self):
         gh = FakeGitHub(artifacts=1)
@@ -159,14 +181,14 @@ class GitHubBookerTest(unittest.TestCase):
     def test_errors_never_carry_the_token(self):
         b, _ = self.booker(FakeGitHub(dispatch_status=401))
         with self.assertRaises(DispatchError) as ctx:
-            b.start("found")
+            b.start(DEFAULT, "found")
         self.assertIn("401 Bad credentials", str(ctx.exception))
         self.assertNotIn(TOKEN, str(ctx.exception))
 
     def test_missing_token(self):
         b = GitHubBooker("me/repo", "", session=FakeGitHub())
         with self.assertRaises(DispatchError):
-            b.start("found")
+            b.start(DEFAULT, "found")
 
 
 class BookerChoiceTest(unittest.TestCase):

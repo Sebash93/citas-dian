@@ -6,3 +6,6 @@ captures/
 .env
 booker/
 events/
+
+# Real cases contain personal data: never commit
+cases.json

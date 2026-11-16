@@ -2,7 +2,8 @@ name: Booker test run
 
 # Runs the booker by hand to check the live link, the wizard and timings. Dry run by default:
 # it never clicks Agendar. Only tramites whose name contains the city are ever chosen, and a
-# real (non-dry) run is refused for any city other than Medellín.
+# real (non-dry) run is refused outside Bogotá, Bucaramanga, Cali and Medellín.
+# With `case`, the person and city come from that case in the BOOKER_CASES secret.
 on:
   workflow_dispatch:
     inputs:
@@ -12,8 +13,11 @@ on:
       categoria:
         description: "13 = Devoluciones, 7 = RUT (see config.py)"
         default: "13"
+      case:
+        description: "Optional: case id from BOOKER_CASES (sets the person and the city)"
+        default: ""
       city:
-        description: "City to book (videoatención names carry it; presencial picks it in PasoDos)"
+        description: "City to book without a case (videoatención names carry it; presencial picks it in PasoDos)"
         default: "medellin"
       service:
         description: "Optional: which of the city's tramites (e.g. vehiculos)"
@@ -53,6 +57,8 @@ jobs:
           DIAN_CATEGORIA: ${{ inputs.categoria }}
           DIAN_CITY: ${{ inputs.city }}
           DIAN_BOOKING_FILE: /tmp/booking-test.json
+          BOOKER_CASE: ${{ inputs.case || 'default' }}
+          DIAN_CASES_JSON: ${{ inputs.case && secrets.BOOKER_CASES || '' }}
           BOOKER_DOC_TYPE: ${{ secrets.BOOKER_DOC_TYPE }}
           BOOKER_DOC_NUMBER: ${{ secrets.BOOKER_DOC_NUMBER }}
           BOOKER_FULL_NAME: ${{ secrets.BOOKER_FULL_NAME }}

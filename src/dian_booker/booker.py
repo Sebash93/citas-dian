@@ -11,6 +11,7 @@ import urllib.request
 from datetime import datetime
 
 from dian_monitor import cadence
+from dian_monitor.cases import DEFAULT_ID, Case
 from dian_monitor.events import EventLog
 from dian_monitor.notify import Message
 
@@ -72,46 +73,47 @@ def launch_chrome(env):
 
 # --- messages (Spanish, for the Telegram chats) -------------------------------
 
-def msg_get_ready(url):
-    return Message("🟠 PREPÁRATE: el bot está entrando a la DIAN por una cita en Medellín.\n\n"
+def msg_get_ready(url, who):
+    return Message(f"🟠 PREPÁRATE: el bot está entrando a la DIAN por una cita en {who}.\n\n"
                    "Abre el navegador ya; cuando llegue al captcha te aviso para que lo toques.",
                    urgent=True, button=("Abrir navegador", url), private=True)
 
 
-def msg_tap_captcha(url, chosen):
+def msg_tap_captcha(url, chosen, who):
     lines = "\n".join(f"{k}: {v}" for k, v in chosen.items() if v)
-    return Message(f"🔴 TOCA EL CAPTCHA AHORA (\"No soy un robot\")\n\n{lines}\n\n"
+    return Message(f"🔴 TOCA EL CAPTCHA AHORA (\"No soy un robot\") — {who}\n\n{lines}\n\n"
                    "Después de tocarlo no hagas nada más: el bot termina solo.",
                    urgent=True, button=("Abrir navegador", url), private=True)
 
 
-def msg_booked(chosen):
+def msg_booked(chosen, who):
     lines = "\n".join(f"{k}: {v}" for k, v in chosen.items() if v)
-    return Message(f"✅ CITA AGENDADA EN LA DIAN\n\n{lines}\n\nRevisa tu correo para la confirmación.",
+    return Message(f"✅ CITA AGENDADA EN LA DIAN — {who}\n\n{lines}\n\n"
+                   "Revisa el correo del caso para la confirmación.",
                    urgent=True)
 
 
-def msg_dry_run(chosen):
+def msg_dry_run(chosen, who):
     lines = "\n".join(f"{k}: {v}" for k, v in chosen.items() if v)
-    return Message(f"🧪 Prueba completa: llegué al botón Agendar sin tocarlo.\n\n{lines}")
+    return Message(f"🧪 Prueba completa ({who}): llegué al botón Agendar sin tocarlo.\n\n{lines}")
 
 
-def msg_failed(stage, error, url, hold_minutes):
-    text = f"⚠️ El bot no pudo terminar ({stage}): {str(error)[:300]}"
+def msg_failed(stage, error, url, hold_minutes, who):
+    text = f"⚠️ El bot no pudo terminar — {who} ({stage}): {str(error)[:300]}"
     if url:
         text += f"\n\nEl navegador queda abierto {hold_minutes} min por si quieres seguir tú."
         return Message(text, urgent=True, button=("Abrir navegador", url), private=True)
     return Message(text, urgent=True)
 
 
-def msg_not_open(minutes):
-    return Message(f"ℹ️ Bot DIAN: Medellín no apareció en {minutes} min; cierro el navegador.")
+def msg_not_open(minutes, who):
+    return Message(f"ℹ️ Bot DIAN: {who} no apareció en {minutes} min; cierro el navegador.")
 
 
-def msg_unresponsive(stage, minutes_held):
+def msg_unresponsive(stage, minutes_held, who):
     tail = (f"Dejo el navegador abierto {minutes_held} min por si quieres seguir a mano."
             if minutes_held else "Cierro el navegador; el próximo aviso lo vuelve a intentar.")
-    return Message(f"⏳ La página de la DIAN no respondió ({stage}). {tail}")
+    return Message(f"⏳ La página de la DIAN no respondió — {who} ({stage}). {tail}")
 
 
 # --- run ----------------------------------------------------------------------
@@ -119,8 +121,11 @@ def msg_unresponsive(stage, minutes_held):
 class Booker:
     def __init__(self, settings, profile, notifier, trigger="manual", dry_run=False, local=False,
                  wait_minutes=12, captcha_minutes=10, hold_minutes=10, shots_dir="booker",
-                 service_hint=""):
+                 service_hint="", case=None):
+        """`settings.city` and `settings.booking_file` must already be the case's."""
         self.settings = settings
+        self.case = case or Case(DEFAULT_ID, settings.city)
+        self.who = self.case.who
         self.profile = profile
         self.notifier = notifier
         self.trigger = trigger
@@ -142,7 +147,7 @@ class Booker:
     def run(self):
         started = time.monotonic()
         self.events.emit("booker_start", trigger=self.trigger, dry_run=self.dry_run,
-                         local=self.local)
+                         local=self.local, case=self.case.id, city=self.case.city)
         try:
             result = self._run(started)
         except Exception as e:  # noqa: BLE001 - e.g. the display or Chrome did not start
@@ -150,6 +155,7 @@ class Booker:
             self.error = e
             result = FAILED
         self.events.emit("booker_end", trigger=self.trigger, result=result, stage=self.stage,
+                         case=self.case.id, city=self.case.city,
                          seconds=round(time.monotonic() - started, 1),
                          captcha_wait=self.captcha_wait, link_sent=bool(self.url),
                          error=self._error_text())
@@ -213,11 +219,11 @@ class Booker:
                 if wizard.unresponsive:
                     log(f"DIAN's page was still unresponsive after {self.wait_minutes} min.")
                     if self.url:
-                        self.notifier.send(msg_unresponsive(self.stage, 0))
+                        self.notifier.send(msg_unresponsive(self.stage, 0, self.who))
                     return UNRESPONSIVE
                 log(f"Target not offered within {self.wait_minutes} min.")
                 if self.url:
-                    self.notifier.send(msg_not_open(self.wait_minutes))
+                    self.notifier.send(msg_not_open(self.wait_minutes, self.who))
                 return NOT_OPEN
             self._mark("service_chosen", started)
             self._share_link_soon(display)
@@ -227,7 +233,7 @@ class Booker:
             self.stage = "PasoTres"
             wizard.before_captcha(self.profile)
             self._wait_for_link()
-            self.notifier.send(msg_tap_captcha(self.url, wizard.chosen) if self.url else
+            self.notifier.send(msg_tap_captcha(self.url, wizard.chosen, self.who) if self.url else
                                Message("🔴 Toca el captcha en la ventana de Chrome.", urgent=True))
             self._mark("captcha_shown", started)
             self.stage = "captcha"
@@ -235,8 +241,8 @@ class Booker:
             solved = wizard.wait_captcha(shown + self.captcha_minutes * 60)
             self.captcha_wait = round(time.monotonic() - shown, 1)
             if not solved:
-                self.notifier.send(Message(f"⌛ Nadie tocó el captcha en {self.captcha_minutes} min; "
-                                           "cierro el navegador."))
+                self.notifier.send(Message(f"⌛ Nadie tocó el captcha de {self.who} en "
+                                           f"{self.captcha_minutes} min; cierro el navegador."))
                 return CAPTCHA_TIMEOUT
             self._mark("captcha_solved", started)
             self.stage = "datos"
@@ -244,14 +250,14 @@ class Booker:
             self._mark("form_filled", started)
             if self.dry_run:
                 self._shot(page, "dry-run")
-                self.notifier.send(msg_dry_run(wizard.chosen))
+                self.notifier.send(msg_dry_run(wizard.chosen, self.who))
                 self._hold(page, 2, wizard.chosen)
                 return DRY_RUN_OK
             self.stage = "confirmar"
             confirmation = wizard.confirm()
             self._mark("booked", started)
             self._record(wizard.chosen)
-            self.notifier.send(msg_booked(wizard.chosen))
+            self.notifier.send(msg_booked(wizard.chosen, self.who))
             self.notifier.send_photo(self._shot(page, "booked"), confirmation[:900])
             return BOOKED
         except Exception as e:  # noqa: BLE001 - report it, then let the human take over
@@ -259,12 +265,13 @@ class Booker:
             hold = self.hold_minutes if self.url and self.stage in HOLD_STAGES else 0
             if is_unresponsive(e):
                 log(f"DIAN's page stopped answering at {self.stage}.")
-                self.notifier.send(msg_unresponsive(self.stage, hold))
+                self.notifier.send(msg_unresponsive(self.stage, hold, self.who))
                 result = UNRESPONSIVE
             else:
                 log(f"Failed at {self.stage}: {type(e).__name__}")
                 shot = self._shot(page, "failed")
-                self.notifier.send(msg_failed(self.stage, e, self.url if hold else None, hold))
+                self.notifier.send(msg_failed(self.stage, e, self.url if hold else None, hold,
+                                              self.who))
                 if shot:
                     self.notifier.send_photo(shot, f"Pantalla al fallar ({self.stage})")
                 result = SLOT_GONE if isinstance(e, SlotUnavailable) else FAILED
@@ -284,7 +291,7 @@ class Booker:
         try:
             self.url = display.url()
             if self.url:
-                self.notifier.send(msg_get_ready(self.url))
+                self.notifier.send(msg_get_ready(self.url, self.who))
                 self.events.emit("booker_link_sent")
         except Exception as e:  # noqa: BLE001 - raised again by _wait_for_link at the captcha
             log(f"Live link failed: {type(e).__name__}")
@@ -308,8 +315,9 @@ class Booker:
                         self.notifier.send(Message("✅ Parece que agendaste a mano. Revisa tu correo."))
                     else:
                         self.notifier.send(Message(
-                            "⚠️ Se agendó a mano una cita que NO es de Medellín. No la registro, "
-                            "así que el bot sigue buscando Medellín. Cancélala si no la quieres."))
+                            f"⚠️ Se agendó a mano una cita que NO es de {self.case.city_name}. "
+                            f"No la registro, así que el bot sigue buscando para {self.who}. "
+                            "Cancélala si no la quieres."))
                     return
             except Exception:  # noqa: BLE001 - the page may be mid-navigation
                 pass
@@ -335,5 +343,6 @@ class Booker:
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump({"booked": True, "at": cadence.now_bogota().isoformat(timespec="seconds"),
-                       "chosen": chosen, "dry_run": False}, f, ensure_ascii=False, indent=2)
+                       "case": self.case.id, "chosen": chosen, "dry_run": False}, f,
+                      ensure_ascii=False, indent=2)
         return True

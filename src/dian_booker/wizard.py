@@ -11,7 +11,7 @@ flow follows the site's scripts and must be confirmed with a --dry-run:
 import re
 import time
 
-from dian_monitor.check import normalize
+from dian_monitor.check import mentions_city, normalize  # noqa: F401 - mentions_city re-exported
 from dian_monitor.config import CATEGORIAS
 
 STEP_TIMEOUT = 95  # seconds; DIAN's slowest observed answers are ~35 s, the client allows 90
@@ -37,15 +37,6 @@ def is_unresponsive(error):
     return isinstance(error, PageUnresponsive) or type(error).__name__ == "TimeoutError"
 
 
-def mentions_city(text, city):
-    """True if `city` appears as a word in `text`, ignoring accents and case.
-
-    DIAN writes the city in different ways ('“Medellín - Solicitud…”' in the API,
-    'Medellín “Solicitud…”' in the wizard), so the check is on the word, not the format.
-    """
-    return re.search(rf"\b{re.escape(normalize(city))}\b", normalize(text)) is not None
-
-
 class WizardError(Exception):
     """The page did not do what we expected; a human can take over through the link."""
 
@@ -66,6 +57,16 @@ def choose_option(options, wanted):
     """Index of the option whose text equals `wanted` ignoring accents/case, else None."""
     target = normalize(wanted)
     return next((i for i, o in enumerate(options) if o.strip() and normalize(o) == target), None)
+
+
+def choose_city(options, city):
+    """The PasoDos city option: exact (accents/case aside), or the city with a "D.C." suffix
+    ("Bogotá D.C."). Never another city whose name only contains it ("Medellín Norte")."""
+    exact = choose_option(options, city)
+    if exact is not None:
+        return exact
+    return next((i for i, o in enumerate(options) if o.strip() and re.sub(
+        r"[\s,]*d\.?\s?c\.?$", "", normalize(o)).strip() == normalize(city)), None)
 
 
 class Wizard:
@@ -181,7 +182,7 @@ class Wizard:
             raise SlotUnavailable(self.error_text())
         if "Ciudades" in found:
             select, options = self.select_options("Ciudades")
-            index = choose_option(options, self.settings.city)
+            index = choose_city(options, self.settings.city)
             if index is None:
                 raise SlotUnavailable(f"city not in PasoDos list: {[o for o in options if o]}")
             select.select_option(index=index)

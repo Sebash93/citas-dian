@@ -16,6 +16,7 @@ from dian_booker.remote import RemoteDisplay, novnc_url, tunnel_url_in  # noqa: 
 from dian_booker.wizard import (CityMismatch, PageUnresponsive, Wizard,  # noqa: E402
                                 choose_option, choose_service, is_unresponsive, mentions_city)
 from dian_monitor import events  # noqa: E402
+from dian_monitor.cases import Case  # noqa: E402
 from dian_monitor.config import Settings  # noqa: E402
 from dian_monitor.monitor import BookerProcess, Monitor, already_booked  # noqa: E402
 from dian_monitor.notify import ConsoleNotifier  # noqa: E402
@@ -101,9 +102,9 @@ class RemoteTest(unittest.TestCase):
         from io import StringIO
         out = StringIO()
         with redirect_stdout(out):
-            notifier.send(booker.msg_get_ready(secret))
-            notifier.send(booker.msg_tap_captcha(secret, {"hora": "8:00 AM"}))
-            notifier.send(booker.msg_failed("datos", "x", secret, 10))
+            notifier.send(booker.msg_get_ready(secret, "Medellín"))
+            notifier.send(booker.msg_tap_captcha(secret, {"hora": "8:00 AM"}, "Medellín"))
+            notifier.send(booker.msg_failed("datos", "x", secret, 10, "Medellín"))
         self.assertNotIn("ab12cd34", out.getvalue())
 
 
@@ -166,9 +167,9 @@ class SafetyStopTest(unittest.TestCase):
             os.environ.clear()
             os.environ.update(old)
 
-    def test_real_booking_outside_medellin_is_refused(self):
+    def test_real_booking_outside_the_appointment_cities_is_refused(self):
         from dian_booker.__main__ import main
-        env = {**ENV, "DIAN_CITY": "bogota", "BOOKER_DRY_RUN": ""}
+        env = {**ENV, "DIAN_CITY": "pasto", "BOOKER_DRY_RUN": ""}
         old = dict(os.environ)
         os.environ.update(env)
         try:
@@ -290,32 +291,43 @@ class RemoteDisplayStartTest(unittest.TestCase):
 
 
 class FakeBooker:
-    def __init__(self):
-        self.started = []
+    """Per case: `busy` and `is_booked` apply to every case unless set in the dicts."""
+
+    def __init__(self, capacity=4):
+        self.started = []        # triggers, in order
+        self.started_cases = []  # (case id, trigger), in order
         self.busy = False
         self.is_booked = False
+        self.busy_cases = set()
+        self.booked_cases = set()
+        self.capacity = capacity
 
-    def booked(self):
-        return self.is_booked
+    def booked(self, case):
+        return self.is_booked or case.id in self.booked_cases
 
-    def describe(self):
+    def describe(self, case):
         return "fake run"
 
-    def running(self):
-        return self.busy
+    def running(self, case):
+        return self.busy or case.id in self.busy_cases
 
-    def start(self, trigger):
-        if self.busy:
+    def active(self):
+        return len(self.busy_cases)
+
+    def start(self, case, trigger):
+        if self.running(case):
             return False
         self.started.append(trigger)
-        self.busy = True
+        self.started_cases.append((case.id, trigger))
+        self.busy_cases.add(case.id)
         return True
 
     def wait(self):
         self.busy = False
+        self.busy_cases.clear()
 
 
-def make(items, latencies=None, **overrides):
+def make(items, latencies=None, cases=None, **overrides):
     tmp = tempfile.mkdtemp()
     settings = replace(Settings(), state_file=os.path.join(tmp, "state.json"),
                        captures_dir=os.path.join(tmp, "captures"),
@@ -325,7 +337,7 @@ def make(items, latencies=None, **overrides):
     clock = Clock(FRIDAY)
     fake = FakeBooker()
     mon = Monitor(settings, ConsoleNotifier(), client=FakeClient(items, latencies), clock=clock,
-                  sleep=clock.sleep, rand=lambda a, b: (a + b) / 2, booker=fake)
+                  sleep=clock.sleep, rand=lambda a, b: (a + b) / 2, booker=fake, cases=cases)
     return mon, fake
 
 
@@ -339,7 +351,7 @@ class BookerLaunchTest(unittest.TestCase):
     def test_booker_is_replaced_on_the_next_check_while_still_open(self):
         mon, fake = make([colas("colas_medellin.json")] * 3)
         mon.poll()
-        fake.busy = False  # the first booker ended (e.g. SLOT_GONE) but Medellín is still open
+        fake.wait()  # the first booker ended (e.g. SLOT_GONE) but Medellín is still open
         mon.poll()         # no alert is due yet, the booker starts again anyway
         self.assertEqual(fake.started, ["found", "found"])
 
@@ -367,7 +379,7 @@ class BookerLaunchTest(unittest.TestCase):
         cali = colas("colas_cali_real.json")
         mon, fake = make([cali, cali, colas("colas_none.json"), cali])
         mon.poll()
-        fake.busy = False  # the watch ended, Cali is still open
+        fake.wait()  # the watch ended, Cali is still open
         mon.poll()
         self.assertEqual(fake.started, ["watch"])
         mon.poll()         # closed
@@ -390,10 +402,10 @@ class BookerLaunchTest(unittest.TestCase):
         mon, fake = make([colas("colas_cali_real.json"), colas("colas_cali_real.json"),
                           colas("colas_medellin.json")])
         mon.poll()
-        mon.state["last_other_cities"] = []  # a second new tramite while the watch runs
-        mon.poll()                           # decision: running
-        mon.poll()                           # Medellín: same "running", under this opening
-        opening = mon.state["open_since"]
+        mon.state["last_open"] = []  # a second new tramite while the watch runs
+        mon.poll()                   # decision: running
+        mon.poll()                   # Medellín: same "running", under this opening
+        opening = mon.state["openings"]["medellin"]["since"]
         self.assertTrue(any(e["kind"] == "booker_decision" and e["opening"] == opening
                             and e["decision"] == "running"
                             for e in events.read(mon.settings.events_file)))
@@ -406,17 +418,22 @@ class BookerLaunchTest(unittest.TestCase):
         self.assertEqual(fake.started, [])
         notes = [m for m in mon.notifier.sent if "ya hay una cita" in m.text]
         self.assertEqual(len(notes), 1)
-        mon.state["last_alert_at"] = None  # force a re-alert for the same opening
+        mon.state["openings"]["medellin"]["last_alert_at"] = None  # force a re-alert
         mon.poll()
         self.assertEqual(len([m for m in mon.notifier.sent if "ya hay una cita" in m.text]), 1)
 
     def test_local_booker_reads_the_booking_file(self):
         path = os.path.join(tempfile.mkdtemp(), "booking.json")
-        proc = BookerProcess(path)
-        self.assertFalse(proc.booked())
+        proc = BookerProcess(replace(Settings(), booking_file=path))
+        default, other = Case("default", "medellin"), Case("cali-1", "cali")
+        self.assertFalse(proc.booked(default))
         with open(path, "w") as f:
             json.dump({"booked": True}, f)
-        self.assertTrue(proc.booked())
+        self.assertTrue(proc.booked(default))
+        self.assertFalse(proc.booked(other))  # its own file: booking-cali-1.json
+        with open(path.replace(".json", "-cali-1.json"), "w") as f:
+            json.dump({"booked": True}, f)
+        self.assertTrue(proc.booked(other))
 
     def test_disabled_by_default(self):
         tmp = tempfile.mkdtemp()

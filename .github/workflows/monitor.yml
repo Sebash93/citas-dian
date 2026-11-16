@@ -61,6 +61,8 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           DIAN_BOOKER: ${{ vars.DIAN_BOOKER }}
           BOOKER_DRY_RUN: ${{ vars.BOOKER_DRY_RUN }}
+          # Watches every case's city; the local booker runs one case at a time.
+          DIAN_CASES_JSON: ${{ secrets.BOOKER_CASES }}
           BOOKER_DOC_TYPE: ${{ secrets.BOOKER_DOC_TYPE }}
           BOOKER_DOC_NUMBER: ${{ secrets.BOOKER_DOC_NUMBER }}
           BOOKER_FULL_NAME: ${{ secrets.BOOKER_FULL_NAME }}
@@ -68,7 +70,9 @@ jobs:
           BOOKER_PHONE: ${{ secrets.BOOKER_PHONE }}
         run: python -m dian_monitor ${{ inputs.once && '--once' || '' }}
 
-      # Same marker as booker.yml, so the Render monitor also learns about this booking.
+      # Same marker as booker.yml, so the Render monitor also learns about this booking. Only
+      # for the default case: bookings of other cases stay in state/booking-<case>.json (the
+      # Actions cache), which this fallback monitor reads, but Render does not see them.
       - name: Mark booked
         if: always()
         run: |

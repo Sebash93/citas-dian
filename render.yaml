@@ -41,6 +41,13 @@ services:
         value: Sebash93/citas-dian
       - key: GITHUB_DISPATCH_TOKEN
         sync: false
+      # The cases to watch (see src/dian_monitor/cases.py). Only id, city, service and enabled
+      # are read here; personal fields, if present, are dropped. Unset = Medellín only (DIAN_CITY).
+      - key: DIAN_CASES_JSON
+        sync: false
+      # Most booker runs at once (default 4).
+      - key: DIAN_MAX_PARALLEL_BOOKERS
+        sync: false
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: TELEGRAM_CHAT_ID

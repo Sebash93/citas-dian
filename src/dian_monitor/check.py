@@ -1,4 +1,4 @@
-"""Turn a raw 'colas' response into a verdict for the target city."""
+"""Turn a raw 'colas' response into a verdict for the watched cities."""
 import html
 import re
 import unicodedata
@@ -6,16 +6,17 @@ from dataclasses import dataclass, field
 
 from .client import STEP_COLAS, STEP_NO_COLAS, SchemaChanged
 
-NONE = "NONE"            # nothing open for the category, or open only in other cities
-FOUND = "FOUND"          # the target city has an open tramite
+NONE = "NONE"            # nothing open for the category, or open only in unwatched cities
+FOUND = "FOUND"          # at least one watched city has an open tramite
 
 
 @dataclass
 class CheckResult:
     status: str
-    matches: list = field(default_factory=list)       # tramite names in the target city
-    other_cities: list = field(default_factory=list)  # open, but not our city (log only)
+    matches: list = field(default_factory=list)       # tramite names in any watched city
+    other_cities: list = field(default_factory=list)  # open, but in no watched city (log only)
     raw: dict = None
+    by_city: dict = field(default_factory=dict)       # watched city -> its open tramite names
 
 
 def normalize(text):
@@ -37,6 +38,15 @@ def _items(data):
     return groups
 
 
+def mentions_city(text, city):
+    """True if `city` appears as a word in `text`, ignoring accents and case.
+
+    DIAN writes the city in different ways ('“Medellín - Solicitud…”' in the API,
+    'Medellín “Solicitud…”' in the wizard), so the check is on the word, not the format.
+    """
+    return re.search(rf"\b{re.escape(normalize(city))}\b", normalize(text)) is not None
+
+
 def city_of(name):
     """City prefix of a tramite name, e.g. '“Cali - Solicitud de devolución…”' -> 'cali'.
 
@@ -48,8 +58,20 @@ def city_of(name):
     return head.strip(" \"'“”‘’«»") if sep else None
 
 
-def evaluate(data, city):
-    """Classify one ValidadorValidar(colas) response."""
+def name_is_in(name, city):
+    """Whether a tramite name belongs to `city`. Only the city prefix counts, and it must be
+    the city itself ('Bogotá D.C. -' is bogota, 'Medellín Norte -' is not medellin). Without
+    a recognizable prefix, the name only (never the whole item)."""
+    prefix = city_of(name)
+    if prefix is None:
+        return mentions_city(name, city)
+    prefix = re.sub(r"[\s,]*d\.?\s?c\.?$", "", prefix).strip()  # "bogota d.c." -> "bogota"
+    return prefix == normalize(city)
+
+
+def evaluate(data, cities):
+    """Classify one ValidadorValidar(colas) response for one city or a list of cities."""
+    cities = [cities] if isinstance(cities, str) else list(cities)
     error = data.get("ErrorString")
     step = data.get("DetalleAdicional")
 
@@ -64,14 +86,15 @@ def evaluate(data, city):
     if not items or not all(isinstance(i, dict) for i in items):
         raise SchemaChanged("found but ObjetosEncontrados has no item objects")
 
-    target = normalize(city)
-    matches, others = [], []
+    by_city, matches, others = {}, [], []
     for item in items:
         name = clean(item.get("Nombre") or "")
         if not name:
             raise SchemaChanged("found an item without Nombre")
-        prefix = city_of(name)
-        # Unrecognized format: fall back to the name only, never the whole item.
-        hit = prefix == target if prefix is not None else target in normalize(name)
-        (matches if hit else others).append(name)
-    return CheckResult(FOUND if matches else NONE, matches, others, raw=data)
+        city = next((c for c in cities if name_is_in(name, c)), None)
+        if city is None:
+            others.append(name)
+        else:
+            by_city.setdefault(city, []).append(name)
+            matches.append(name)
+    return CheckResult(FOUND if matches else NONE, matches, others, raw=data, by_city=by_city)

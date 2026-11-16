@@ -1,20 +1,29 @@
 name: Booker
+# The monitor matches runs to cases by this title ("Booker <case> <trigger>").
+run-name: Booker ${{ inputs.case }} ${{ inputs.trigger }}
 
-# Started by the monitor on Render (GitHub API, workflow_dispatch) when Medellín opens or,
-# to watch for Medellín for a few minutes, when another city opens. Drives the wizard to the reCAPTCHA and sends the live-browser link.
-# After a real booking it uploads an empty `booking-booked` artifact, which stops the
-# monitor from starting more bookers. To test by hand use booker-test.yml instead.
+# Started by the monitor on Render (GitHub API, workflow_dispatch), one run per case, when the
+# case's city opens or, to watch it for a few minutes, when another tramite opens. Drives the
+# wizard to the reCAPTCHA and sends the live-browser link; a human solves the captcha.
+# After a real booking it uploads an empty `booking-booked-<case>` artifact (`booking-booked`
+# for the default case), which stops the monitor from starting more bookers for that case.
+# The cases (with personal data) come from the BOOKER_CASES secret; without it, the default
+# case uses the BOOKER_* secrets. To test by hand use booker-test.yml instead.
 on:
   workflow_dispatch:
     inputs:
       trigger:
-        description: "found: send the link at once; watch: only when Medellín appears"
+        description: "found: send the link at once; watch: only when the case's city appears"
         type: choice
         options: [found, watch]
         default: found
+      case:
+        description: "Case id from BOOKER_CASES (default: the BOOKER_* person, Medellín)"
+        default: default
 
+# One run at a time per case; different cases run in parallel.
 concurrency:
-  group: dian-booker
+  group: dian-booker-${{ inputs.case }}
   cancel-in-progress: false
 
 permissions:
@@ -49,20 +58,25 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           BOOKER_DRY_RUN: ${{ vars.BOOKER_DRY_RUN }}
-          # Optional: which Medellín tramite to prefer when several are open (e.g. vehiculos).
+          # Optional: which tramite to prefer when several are open (e.g. vehiculos); a case's
+          # own `service` wins.
           BOOKER_SERVICE: ${{ vars.BOOKER_SERVICE }}
+          # Passed through env, never interpolated into the script; validated by the booker.
+          BOOKER_CASE: ${{ inputs.case }}
+          DIAN_CASES_JSON: ${{ secrets.BOOKER_CASES }}
           BOOKER_DOC_TYPE: ${{ secrets.BOOKER_DOC_TYPE }}
           BOOKER_DOC_NUMBER: ${{ secrets.BOOKER_DOC_NUMBER }}
           BOOKER_FULL_NAME: ${{ secrets.BOOKER_FULL_NAME }}
           BOOKER_EMAIL: ${{ secrets.BOOKER_EMAIL }}
           BOOKER_PHONE: ${{ secrets.BOOKER_PHONE }}
-        run: python -m dian_booker --trigger ${{ inputs.trigger }}
+        run: python -m dian_booker --trigger "${{ inputs.trigger }}"
 
-      # The marker carries no personal data: booking.json (date, sede) is replaced by a timestamp.
+      # The marker carries no personal data: booking*.json (date, sede) is replaced by a
+      # timestamp. The booker writes booked/booking.json (default case) or booking-<case>.json.
       - name: Mark booked
         if: always()
         run: |
-          if [ -f "$DIAN_BOOKING_FILE" ]; then
+          if ls booked/booking*.json > /dev/null 2>&1; then
             mkdir -p marker && date -u +%FT%TZ > marker/booked.txt
           fi
 
@@ -70,7 +84,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: booking-booked
+          name: ${{ inputs.case == 'default' && 'booking-booked' || format('booking-booked-{0}', inputs.case) }}
           path: marker/booked.txt
           if-no-files-found: ignore
           retention-days: 90

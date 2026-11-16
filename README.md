@@ -1,8 +1,9 @@
 # citas-dian
 
 Watches [agendamiento.dian.gov.co](https://agendamiento.dian.gov.co/?recurso=CitasDIAN) for
-**Persona Natural → Videoatención → Devoluciones** slots in **Medellín** and alerts as soon
-as one opens.
+**Persona Natural → Videoatención → Devoluciones** slots in the cities of your cases
+(Bogotá, Bucaramanga, Cali, Medellín; Medellín only without cases) and alerts as soon as one
+opens.
 
 By default it only notifies you. An optional **booker** (off unless `DIAN_BOOKER=1`) takes
 you as far as it can: it fills in the wizard, sends you a live-browser link on Telegram, and
@@ -94,12 +95,50 @@ Reports on Render (Shell tab):
 
 The repo must be public for unlimited free Actions minutes. Logs contain no personal data.
 
+## Cases: several people and cities
+
+A cases JSON lists the people to book, each with their city. The monitor alerts for every city
+that has an enabled case and starts one booker per case when its city opens. Only the cities
+where DIAN requires an appointment to file a devolución by hand are accepted: **Bogotá,
+Bucaramanga, Cali and Medellín** (everywhere else, documents go by email).
+
+```json
+{"cases": [
+  {"id": "med-1", "city": "medellin", "service": "vehiculos", "enabled": true,
+   "doc_type": "Cédula de ciudadanía", "doc_number": "…", "full_name": "…",
+   "email": "…", "phone": "…", "telegram_chat": ""}
+]}
+```
+
+- `id` shows up in public logs and run names: use something like `cali-2`, never a name or
+  document number (ids with 5+ digits in a row are rejected).
+- `service` (optional) is the preferred tramite for this case (`vehiculos`); `enabled: false`
+  pauses a case; `telegram_chat` (optional) sends this case's links to another chat.
+- `cases.example.json` has one fake case per city plus a second Cali case. Copy it to
+  `cases.json` (git-ignored) for real data, and never commit it.
+
+Where it goes:
+- **GitHub secret `BOOKER_CASES`**: the full JSON, minified to one line
+  (`python3 -m json.tool --compact cases.json`). The booker reads only its own case.
+- **Render `DIAN_CASES_JSON`**: the same JSON without the personal fields (id, city, service,
+  enabled are enough). The monitor drops personal fields even if they are there.
+- Locally: `DIAN_CASES_FILE=cases.json`.
+
+Without a cases JSON, everything works as before: one "default" case for `DIAN_CITY`
+(Medellín) with the `BOOKER_*` secrets.
+
+When a city opens, you get one alert for it listing the cases still waiting. A city whose cases
+all have a booking recorded is not alerted (you get one note instead). At most
+`DIAN_MAX_PARALLEL_BOOKERS` (default 4) booker runs go at once; cases of an open city start
+before silent watches. Each captcha message says which case it is for.
+
 ## Booker (optional)
 
-When Medellín opens, the monitor starts the booker. It also starts one silently when another
-city opens, because DIAN releases cities in waves: for up to 12 minutes the booker checks for
-Medellín about every 25 s and sends you nothing unless Medellín appears. It never books another
-city (`DIAN_BOOKER_ON_OTHER_CITY=0` turns this off).
+When a case's city opens, the monitor starts that case's booker. When any new tramite opens,
+it also starts one silently for each case whose city is not open, because DIAN releases cities
+in waves: for up to 12 minutes the booker checks for its city about every 25 s and sends you
+nothing unless it appears. It never books another city (`DIAN_BOOKER_ON_OTHER_CITY=0` turns
+this off).
 On Render (`DIAN_BOOKER_REPO` set), it dispatches `booker.yml` through the GitHub API; the
 run usually starts within seconds. In GitHub's fallback `monitor.yml`, it runs
 `python -m dian_booker` on the same runner. Either way:
@@ -108,7 +147,7 @@ run usually starts within seconds. In GitHub's fallback `monitor.yml`, it runs
    tunnel and opens Chrome on the screen.
 2. It sends **"PREPÁRATE"** with the link as soon as the tunnel is up, so you can open it
    while the bot works. The wizard doesn't wait for the tunnel.
-3. It goes through Persona Natural → Videoatención → Devoluciones → Medellín, then picks the
+3. It goes through Persona Natural → Videoatención → Devoluciones → the case's city, then picks the
    earliest date and time and your document type. Each step takes 5–10 s when slots are open.
 4. It sends **"TOCA EL CAPTCHA"**. You tap "No soy un robot" in the live view.
 5. It types your document number, fills in or confirms your details, accepts the data policy,
@@ -118,23 +157,23 @@ If anything fails after the link was sent, the browser stays open 10 minutes so 
 by hand. Add more people to `TELEGRAM_CHAT_ID` (comma-separated) so that anyone you trust can
 tap the captcha.
 
-The booker only ever picks a tramite whose name contains **Medellín**. There is no default
-option: if no Medellín tramite is offered, it books nothing (`NOT_OPEN`). It checks the
-city again before the captcha and before Agendar, and refuses a real booking for any other
-city. If several Medellín tramites are open, the repo variable `BOOKER_SERVICE` sets the
-preference (`vehiculos`: "Vehículos eléctricos o Híbridos" first, otherwise any other
-Medellín tramite).
+The booker only ever picks a tramite whose name contains **its case's city**. There is no
+default option: if no tramite of that city is offered, it books nothing (`NOT_OPEN`). It
+checks the city again before the captcha and before Agendar, and refuses a real booking
+outside the four appointment cities. If several tramites of the city are open, the case's
+`service` (or the repo variable `BOOKER_SERVICE`) sets the preference (`vehiculos`:
+"Vehículos eléctricos o Híbridos" first, otherwise any other tramite of the city).
 
-While Medellín is open, the monitor checks on every poll that a booker is running and starts
+While a city is open, the monitor checks on every poll that each of its cases has a booker and starts
 a new one if the last one ended. Each change ("started", "running (GitHub run … queued)",
 "booked", "off", "error") is logged on Render and in the event log, and the report lists them
 under each opening, flagging any opening that had no booker.
 
-Only one booker runs at a time. After a real **Medellín** booking (by the bot, or by you in
-the live browser) the workflow uploads an empty `booking-booked` artifact. While it exists,
-the monitor starts no more bookers and tells you so on Telegram. Delete the artifact on
-GitHub to book again; the monitor checks it on every alert. Bookings for other cities are
-never recorded.
+One booker runs per case at a time. After a real booking in the case's city (by the bot, or
+by you in the live browser) the workflow uploads an empty `booking-booked-<case>` artifact
+(`booking-booked` for the default case). While it exists, the monitor starts no more bookers
+for that case. Delete the artifact on GitHub to book that case again; the monitor checks it on
+every poll. Bookings for another city are never recorded.
 
 If DIAN's page doesn't load, the booker retries instead of failing and reports
 `UNRESPONSIVE`. A failure before the captcha closes the browser at once, so the next alert
@@ -143,10 +182,13 @@ can start a new booker; from the captcha on, the browser stays open for you to f
 Setup:
 - On Render: `DIAN_BOOKER=1` and `GITHUB_DISPATCH_TOKEN`. For the GitHub fallback: repo
   variable `DIAN_BOOKER=1`. Repo variable `BOOKER_DRY_RUN=1` stops before Agendar in both.
-- Secrets: `BOOKER_DOC_NUMBER`, `BOOKER_FULL_NAME`, `BOOKER_EMAIL`, `BOOKER_PHONE`, and
-  optionally `BOOKER_DOC_TYPE` (default "Cédula de ciudadanía").
-- To test: **Actions → Booker test run** walks any open category (default: Presencial / RUT /
-  Medellín) as a dry run and sends you the link.
+- Secrets: `BOOKER_CASES` (see Cases), or for the single default case `BOOKER_DOC_NUMBER`,
+  `BOOKER_FULL_NAME`, `BOOKER_EMAIL`, `BOOKER_PHONE`, and optionally `BOOKER_DOC_TYPE`
+  (default "Cédula de ciudadanía").
+- To test: **Actions → Booker test run** walks any open category as a dry run and sends you
+  the link. Give it a `case` to use that case's person and city.
+- The GitHub fallback monitor runs one booker at a time, and only the default case's booking
+  reaches Render (other cases' bookings stay in its own state).
 
 Locally: `pip install -r requirements-booker.txt` and run
 `PYTHONPATH=src python3 -m dian_booker --local --dry-run --trigger found`. It uses your own
@@ -177,7 +219,8 @@ your name, document, email and phone before they're written.
 
 ## Settings (environment variables)
 
-`DIAN_CITY` (default `medellin`), `DIAN_TIPO_PERSONA`, `DIAN_TIPO_ATENCION`, `DIAN_CATEGORIA`,
+`DIAN_CASES_JSON` / `DIAN_CASES_FILE` (the cases), `DIAN_MAX_PARALLEL_BOOKERS`,
+`DIAN_CITY` (without cases; default `medellin`), `DIAN_TIPO_PERSONA`, `DIAN_TIPO_ATENCION`, `DIAN_CATEGORIA`,
 `DIAN_RUN_BUDGET_SECONDS`, `DIAN_REALERT_SECONDS`, `DIAN_MAX_REALERTS`,
 `DIAN_FAILURES_BEFORE_ALERT`, `DIAN_HEARTBEAT_HOUR`, `DIAN_BOOKER`, `DIAN_BOOKER_REPO`,
 `DIAN_HEALTHCHECK_URL`. See `src/dian_monitor/config.py`.

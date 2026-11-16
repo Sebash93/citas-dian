@@ -23,7 +23,11 @@ class Settings:
     tipo_atencion: str = "2"
     categoria: str = "13"
     # Accent/case-insensitive city matched against the "<City> - ..." prefix of each tramite.
+    # Used only without a cases JSON (one "default" case); with cases, each case has its city.
     city: str = "medellin"
+    # The cases (people to book and their cities, see cases.py): inline JSON or a file path.
+    cases_json: str = ""
+    cases_file: str = ""
 
     state_file: str = "state/state.json"
     captures_dir: str = "captures"
@@ -42,12 +46,16 @@ class Settings:
     # Start `python -m dian_booker` on an opening. The booker stops at the reCAPTCHA and sends a
     # live-browser link for a human to solve it.
     booker: bool = False
-    # Also start it, silently, when another city opens: DIAN releases cities in waves, so it
-    # watches for Medellín for a few minutes. It never books or alerts for the other city.
+    # Also start it, silently, for each case whose city is not open when a new tramite opens
+    # anywhere: DIAN releases cities in waves, so it watches the case's city for a few
+    # minutes. It never books or alerts for another city.
     booker_on_other_city: bool = True
     # "owner/repo": start the booker as a GitHub Actions run (booker.yml) instead of a local
     # process. Used when the monitor runs on Render; needs GITHUB_DISPATCH_TOKEN.
     booker_repo: str = ""
+    # At most this many booker runs at once (one per case), so a wave of openings can't start
+    # a browser per case all polling DIAN. A local booker process always runs one at a time.
+    max_parallel_bookers: int = 4
     # Written by the booker after a confirmed booking; while it says booked, no more bookers.
     booking_file: str = "state/booking.json"
     # Structured event log (JSONL) for reports; kept with the state, uploaded after each run.
@@ -63,6 +71,8 @@ class Settings:
             tipo_atencion=_env("DIAN_TIPO_ATENCION", cls.tipo_atencion),
             categoria=_env("DIAN_CATEGORIA", cls.categoria),
             city=_env("DIAN_CITY", cls.city),
+            cases_json=_env("DIAN_CASES_JSON", cls.cases_json),
+            cases_file=_env("DIAN_CASES_FILE", cls.cases_file),
             state_file=_env("DIAN_STATE_FILE", cls.state_file),
             captures_dir=_env("DIAN_CAPTURES_DIR", cls.captures_dir),
             run_budget_seconds=int(_env("DIAN_RUN_BUDGET_SECONDS", cls.run_budget_seconds)),
@@ -73,6 +83,7 @@ class Settings:
             booker=_flag("DIAN_BOOKER", cls.booker),
             booker_on_other_city=_flag("DIAN_BOOKER_ON_OTHER_CITY", cls.booker_on_other_city),
             booker_repo=_env("DIAN_BOOKER_REPO", cls.booker_repo),
+            max_parallel_bookers=int(_env("DIAN_MAX_PARALLEL_BOOKERS", cls.max_parallel_bookers)),
             booking_file=_env("DIAN_BOOKING_FILE", cls.booking_file),
             events_file=_env("DIAN_EVENTS_FILE", cls.events_file),
             healthcheck_url=_env("DIAN_HEALTHCHECK_URL", cls.healthcheck_url),
@@ -83,7 +94,7 @@ class Settings:
         persona = "Persona Natural" if self.tipo_persona == "1" else "Persona Juridica"
         atencion = "Videoatención" if self.tipo_atencion == "2" else "Presencial"
         categoria = CATEGORIAS.get(self.categoria, self.categoria)
-        return f"{persona} / {atencion} / {categoria} / {self.city.title()}"
+        return f"{persona} / {atencion} / {categoria}"
 
 
 CATEGORIAS = {
