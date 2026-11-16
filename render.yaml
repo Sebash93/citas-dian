@@ -16,6 +16,7 @@ services:
         - src/dian_monitor/**
         - requirements.txt
         - render.yaml
+        - cases.json
     disk:
       name: dian-data
       mountPath: /var/data
@@ -41,10 +42,11 @@ services:
         value: Sebash93/citas-dian
       - key: GITHUB_DISPATCH_TOKEN
         sync: false
-      # The cases to watch (see src/dian_monitor/cases.py). Only id, city, service and enabled
-      # are read here; personal fields, if present, are dropped. Unset = Medellín only (DIAN_CITY).
-      - key: DIAN_CASES_JSON
-        sync: false
+      # The cases to watch, from the repo (see src/dian_monitor/cases.py). Only id, city,
+      # service and enabled are read here; personal fields are dropped. Editing cases.json
+      # redeploys. DIAN_CASES_JSON, if set in the dashboard, takes precedence.
+      - key: DIAN_CASES_FILE
+        value: cases.json
       # Most booker runs at once (default 4).
       - key: DIAN_MAX_PARALLEL_BOOKERS
         sync: false

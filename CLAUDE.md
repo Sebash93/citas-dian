@@ -8,7 +8,7 @@ A watcher for DIAN appointment slots (agendamiento.dian.gov.co): Persona Natural
 
 Hard constraints:
 - A human always solves the reCAPTCHA. Never add captcha-solving services or audio/AI solvers, and never auto-solve the captcha in any other way.
-- Personal data (BOOKER_* secrets, the personal fields of the cases JSON) and the live-browser link must never reach logs or uploaded artifacts. The repo is public. Use `Message(private=True)` for link messages. Screenshots go only to Telegram. The monitor loads cases with `personal=False` and never holds personal data; case ids (public in logs and run names) are validated to carry none. `CasesError`/`ProfileError` texts name fields, never values.
+- Personal data (BOOKER_* secrets, the personal fields of the cases JSON) and the live-browser link must never reach logs or uploaded artifacts. Exception, by the owner's explicit decision (2026-11-16): `cases.json` is tracked in the repo with the cases' personal data; never copy it anywhere else (logs, events, artifacts, messages). The repo is public. Use `Message(private=True)` for link messages. Screenshots go only to Telegram. The monitor loads cases with `personal=False` and never holds personal data; case ids (public in logs and run names) are validated to carry none. `CasesError`/`ProfileError` texts name fields, never values.
 - Cities are limited to `cases.ALLOWED_CITIES` (Bogotá, Bucaramanga, Cali, Medellín: the seccionales where DIAN requires an appointment for manual devoluciones). Alerts fire only for cities of enabled cases. Openings in other cities are logged and captured, never alerted.
 - A booker works for one case and books only a tramite whose name contains that case's city word (`mentions_city`), with no default or fallback option. DIAN names the city differently in the API (`“Medellín - …”`) and in the wizard (`Medellín “…”`), so match the word, never a format. `Wizard.check_city()` re-checks before the captcha and before Agendar, `_record` only records bookings in the case's city, and `dian_booker` refuses real (non-dry) runs for a city outside `ALLOWED_CITIES`.
 - Real bookings are always Videoatención / Devoluciones: `dian_booker` refuses non-dry runs with any other `DIAN_TIPO_ATENCION`/`DIAN_CATEGORIA` (those are only for dry-run wizard checks in `booker-test.yml`).
@@ -102,7 +102,7 @@ The monitor and booker deploy separately from this one repo:
 - `keepalive.yml` re-enables the schedule twice a month.
 - Booker settings:
   - `DIAN_BOOKER=1` turns the booker on (Render env for the Render monitor, repo variable for the fallback). The repo variable `BOOKER_DRY_RUN=1` makes it stop before Agendar.
-  - Secrets: `BOOKER_CASES` (the full cases JSON, one line; mapped to `DIAN_CASES_JSON`), or for the default case `BOOKER_DOC_NUMBER`, `BOOKER_FULL_NAME`, `BOOKER_EMAIL`, `BOOKER_PHONE`, and optionally `BOOKER_DOC_TYPE`. Render's `DIAN_CASES_JSON` needs only the routing fields.
-  - `cases.example.json` is fake data; real cases go in git-ignored `cases.json`, never committed.
+  - Cases: `cases.json` in the repo, read through `DIAN_CASES_FILE=cases.json` by Render (in `buildFilter`, so edits redeploy) and all workflows. `DIAN_CASES_JSON` wins if set. For the default case, secrets `BOOKER_DOC_NUMBER`, `BOOKER_FULL_NAME`, `BOOKER_EMAIL`, `BOOKER_PHONE`, and optionally `BOOKER_DOC_TYPE`.
+  - `cases.example.json` is fake data; `tests/test_cases.py` validates both files so a broken `cases.json` fails CI.
   - `booker-test.yml` runs the booker by hand on any category, as a dry run by default.
 - The repo must stay public for free Actions minutes, so logs must not contain personal data.

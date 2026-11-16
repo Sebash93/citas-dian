@@ -49,6 +49,16 @@ class ParseTest(unittest.TestCase):
                          ["bogota", "bucaramanga", "cali", "medellin"])
         self.assertEqual(sum(c.city == "cali" for c in parsed), 2)
 
+    def test_repo_cases_file_is_valid(self):
+        # Render and every workflow read it: a typo must fail CI, not the monitor.
+        path = os.path.join(ROOT, "cases.json")
+        if not os.path.exists(path):
+            self.skipTest("no cases.json")
+        with open(path, encoding="utf-8") as f:
+            parsed = cases.parse(f.read(), personal=True)
+        for case in (c for c in parsed if c.enabled):
+            Profile.from_case(case)  # every enabled case has a usable person
+
     def test_monitor_never_keeps_personal_data(self):
         text = json.dumps({"cases": [person("med-1", "Medellín")]})
         routing = cases.parse(text)[0]

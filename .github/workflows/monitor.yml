@@ -62,7 +62,7 @@ jobs:
           DIAN_BOOKER: ${{ vars.DIAN_BOOKER }}
           BOOKER_DRY_RUN: ${{ vars.BOOKER_DRY_RUN }}
           # Watches every case's city; the local booker runs one case at a time.
-          DIAN_CASES_JSON: ${{ secrets.BOOKER_CASES }}
+          DIAN_CASES_FILE: cases.json
           BOOKER_DOC_TYPE: ${{ secrets.BOOKER_DOC_TYPE }}
           BOOKER_DOC_NUMBER: ${{ secrets.BOOKER_DOC_NUMBER }}
           BOOKER_FULL_NAME: ${{ secrets.BOOKER_FULL_NAME }}

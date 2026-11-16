@@ -114,15 +114,17 @@ Bucaramanga, Cali and Medellín** (everywhere else, documents go by email).
   document number (ids with 5+ digits in a row are rejected).
 - `service` (optional) is the preferred tramite for this case (`vehiculos`); `enabled: false`
   pauses a case; `telegram_chat` (optional) sends this case's links to another chat.
-- `cases.example.json` has one fake case per city plus a second Cali case. Copy it to
-  `cases.json` (git-ignored) for real data, and never commit it.
+- `cases.example.json` has one fake case per city plus a second Cali case.
 
-Where it goes:
-- **GitHub secret `BOOKER_CASES`**: the full JSON, minified to one line
-  (`python3 -m json.tool --compact cases.json`). The booker reads only its own case.
-- **Render `DIAN_CASES_JSON`**: the same JSON without the personal fields (id, city, service,
-  enabled are enough). The monitor drops personal fields even if they are there.
-- Locally: `DIAN_CASES_FILE=cases.json`.
+The cases live in **`cases.json` in the repo**: Render, `booker.yml`, `booker-test.yml` and
+`monitor.yml` all read it (`DIAN_CASES_FILE=cases.json`), so adding or pausing a case is a
+commit, and Render redeploys on it. The monitor drops the personal fields; the booker reads
+only its own case. Locally: `DIAN_CASES_FILE=cases.json`. `DIAN_CASES_JSON`, if set, wins over
+the file.
+
+**The repo is public, so everything in `cases.json` is public too**, including the people's
+document numbers, emails and phones, and it stays in git history after you remove it. The
+code never logs it, but anyone can read the file.
 
 Without a cases JSON, everything works as before: one "default" case for `DIAN_CITY`
 (Medellín) with the `BOOKER_*` secrets.
@@ -182,7 +184,7 @@ can start a new booker; from the captcha on, the browser stays open for you to f
 Setup:
 - On Render: `DIAN_BOOKER=1` and `GITHUB_DISPATCH_TOKEN`. For the GitHub fallback: repo
   variable `DIAN_BOOKER=1`. Repo variable `BOOKER_DRY_RUN=1` stops before Agendar in both.
-- Secrets: `BOOKER_CASES` (see Cases), or for the single default case `BOOKER_DOC_NUMBER`,
+- Cases: `cases.json` (see Cases). For the single default case, secrets `BOOKER_DOC_NUMBER`,
   `BOOKER_FULL_NAME`, `BOOKER_EMAIL`, `BOOKER_PHONE`, and optionally `BOOKER_DOC_TYPE`
   (default "Cédula de ciudadanía").
 - To test: **Actions → Booker test run** walks any open category as a dry run and sends you
