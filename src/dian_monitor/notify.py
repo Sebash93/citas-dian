@@ -181,6 +181,17 @@ def heartbeat(prev_day, open_cities, watched):
                    f"{stats} {status}")
 
 
-def cases_problem(error):
-    return Message(f"⚠️ Bot DIAN: el JSON de casos tiene un problema ({error}). "
-                   "No estoy vigilando hasta que lo corrijas.", urgent=True)
+def cases_problem(error, have_cases=False):
+    tail = ("Sigo vigilando los últimos casos que conozco y vuelvo a intentar."
+            if have_cases else "No tengo casos para vigilar hasta que lo pueda leer.")
+    return Message(f"⚠️ Bot DIAN: no pude leer los casos ({error}). {tail}", urgent=True)
+
+
+def cases_recovered():
+    return Message("✅ Bot DIAN: volví a leer los casos.")
+
+
+def cases_skipped(problems):
+    lines = "\n".join(f"• {p}" for p in problems[:20])
+    return Message("⚠️ Bot DIAN: estos casos tienen datos incompletos y no los vigilo hasta que "
+                   f"los corrijas en Airtable:\n{lines}")

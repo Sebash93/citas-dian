@@ -1,6 +1,6 @@
 """Settings, all overridable through environment variables."""
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 def _env(name, default):
@@ -23,9 +23,23 @@ class Settings:
     tipo_atencion: str = "2"
     categoria: str = "13"
     # Accent/case-insensitive city matched against the "<City> - ..." prefix of each tramite.
-    # Used only without a cases JSON (one "default" case); with cases, each case has its city.
+    # Used only without cases (one "default" case); with cases, each case has its city.
     city: str = "medellin"
-    # The cases (people to book and their cities, see cases.py): inline JSON or a file path.
+    # The one tramite every case is for: only tramites whose name contains it are watched and
+    # booked, with no fallback to another tramite of the city.
+    service: str = "vehiculos"
+    # The cases (people to book and their cities, see cases.py). Airtable when a token and base
+    # are set; otherwise an inline JSON or a file (local runs and tests).
+    airtable_token: str = field(default="", repr=False)  # secret: never logged
+    airtable_base: str = ""
+    airtable_table: str = "Cases"   # name or tbl… id
+    # Bogotá hours after which the monitor reads the cases again (it also reads them at start).
+    cases_refresh_hours: tuple = (6, 11, 14)
+    # Read the cases at startup even if the cached copy is from after the last refresh hour.
+    # The GitHub fallback monitor starts every ~20 min, so it turns this off to save calls.
+    cases_refresh_on_start: bool = True
+    # Last good read (routing only: id, city, status; no personal data), used if Airtable fails.
+    cases_cache_file: str = "state/cases.json"
     cases_json: str = ""
     cases_file: str = ""
 
@@ -71,6 +85,15 @@ class Settings:
             tipo_atencion=_env("DIAN_TIPO_ATENCION", cls.tipo_atencion),
             categoria=_env("DIAN_CATEGORIA", cls.categoria),
             city=_env("DIAN_CITY", cls.city),
+            service=_env("DIAN_SERVICE", cls.service),
+            airtable_token=_env("AIRTABLE_TOKEN", ""),
+            airtable_base=_env("AIRTABLE_BASE_ID", cls.airtable_base),
+            airtable_table=_env("AIRTABLE_TABLE", cls.airtable_table),
+            cases_refresh_hours=tuple(int(h) for h in _env(
+                "DIAN_CASES_REFRESH_HOURS", ",".join(map(str, cls.cases_refresh_hours))).split(",")
+                if h.strip()),
+            cases_refresh_on_start=_flag("DIAN_CASES_REFRESH_ON_START", cls.cases_refresh_on_start),
+            cases_cache_file=_env("DIAN_CASES_CACHE_FILE", cls.cases_cache_file),
             cases_json=_env("DIAN_CASES_JSON", cls.cases_json),
             cases_file=_env("DIAN_CASES_FILE", cls.cases_file),
             state_file=_env("DIAN_STATE_FILE", cls.state_file),

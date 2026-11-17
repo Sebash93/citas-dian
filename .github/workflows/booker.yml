@@ -7,7 +7,9 @@ run-name: Booker ${{ inputs.case }} ${{ inputs.trigger }}
 # wizard to the reCAPTCHA and sends the live-browser link; a human solves the captcha.
 # After a real booking it uploads an empty `booking-booked-<case>` artifact (`booking-booked`
 # for the default case), which stops the monitor from starting more bookers for that case.
-# The cases come from cases.json in the repo; the default case uses the BOOKER_* secrets. To test by hand use booker-test.yml instead.
+# The cases come from Airtable: the monitor passes the case's id and city, and the booker reads
+# the person only when it needs it and marks the case Booked after a real booking. The default
+# case uses the BOOKER_* secrets. To test by hand use booker-test.yml instead.
 on:
   workflow_dispatch:
     inputs:
@@ -17,8 +19,11 @@ on:
         options: [found, watch]
         default: found
       case:
-        description: "Case id from cases.json (default: the BOOKER_* person, Medellín)"
+        description: "Case id, e.g. case-3 (default: the BOOKER_* person, Medellín)"
         default: default
+      city:
+        description: "The case's city (the monitor passes it; empty = read it from Airtable)"
+        default: ""
 
 # One run at a time per case; different cases run in parallel.
 concurrency:
@@ -57,12 +62,14 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           BOOKER_DRY_RUN: ${{ vars.BOOKER_DRY_RUN }}
-          # Optional: which tramite to prefer when several are open (e.g. vehiculos); a case's
-          # own `service` wins.
-          BOOKER_SERVICE: ${{ vars.BOOKER_SERVICE }}
+          # Only the IVA vehículos tramite is ever booked (DIAN_SERVICE, default vehiculos).
           # Passed through env, never interpolated into the script; validated by the booker.
           BOOKER_CASE: ${{ inputs.case }}
-          DIAN_CASES_FILE: cases.json
+          BOOKER_CITY: ${{ inputs.city }}
+          # The cases live in Airtable (the token is a secret; base and table are variables).
+          AIRTABLE_TOKEN: ${{ secrets.AIRTABLE_TOKEN }}
+          AIRTABLE_BASE_ID: ${{ vars.AIRTABLE_BASE_ID }}
+          AIRTABLE_TABLE: ${{ vars.AIRTABLE_TABLE }}
           BOOKER_DOC_TYPE: ${{ secrets.BOOKER_DOC_TYPE }}
           BOOKER_DOC_NUMBER: ${{ secrets.BOOKER_DOC_NUMBER }}
           BOOKER_FULL_NAME: ${{ secrets.BOOKER_FULL_NAME }}

@@ -327,7 +327,7 @@ class FakeBooker:
         self.busy_cases.clear()
 
 
-def make(items, latencies=None, cases=None, **overrides):
+def make(items, latencies=None, cases=None, feed=None, **overrides):
     tmp = tempfile.mkdtemp()
     settings = replace(Settings(), state_file=os.path.join(tmp, "state.json"),
                        captures_dir=os.path.join(tmp, "captures"),
@@ -337,7 +337,7 @@ def make(items, latencies=None, cases=None, **overrides):
     clock = Clock(FRIDAY)
     fake = FakeBooker()
     mon = Monitor(settings, ConsoleNotifier(), client=FakeClient(items, latencies), clock=clock,
-                  sleep=clock.sleep, rand=lambda a, b: (a + b) / 2, booker=fake, cases=cases)
+                  sleep=clock.sleep, rand=lambda a, b: (a + b) / 2, booker=fake, cases=cases, feed=feed)
     return mon, fake
 
 

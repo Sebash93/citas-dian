@@ -95,39 +95,41 @@ Reports on Render (Shell tab):
 
 The repo must be public for unlimited free Actions minutes. Logs contain no personal data.
 
-## Cases: several people and cities
+## Cases: several people and cities, from Airtable
 
-A cases JSON lists the people to book, each with their city. The monitor alerts for every city
-that has an enabled case and starts one booker per case when its city opens. Only the cities
-where DIAN requires an appointment to file a devolución by hand are accepted: **Bogotá,
-Bucaramanga, Cali and Medellín** (everywhere else, documents go by email).
+The people to book live in the Airtable table **Cases** (base "Gestión de Casos y Citas"). People
+sign up with the Spanish form **"Solicitud de cita DIAN – Devolución IVA vehículos"**. The monitor
+alerts for every city that has a pending case and starts one booker per case when its city
+opens. Only the cities where DIAN requires an appointment to file a devolución by hand are
+accepted: **Bogotá, Bucaramanga, Cali and Medellín** (everywhere else, documents go by email).
+Every case is for the same tramite, **IVA vehículos eléctricos o híbridos**: the general
+devolución tramite is never booked, and its openings are only logged.
 
-```json
-{"cases": [
-  {"id": "med-1", "city": "medellin", "service": "vehiculos", "enabled": true,
-   "doc_type": "Cédula de ciudadanía", "doc_number": "…", "full_name": "…",
-   "email": "…", "phone": "…", "telegram_chat": ""}
-]}
-```
+| Field | Who fills it | Notes |
+|---|---|---|
+| `ID` | Airtable (autonumber) | The case is `case-<ID>` in logs and GitHub runs |
+| `Full name`, `City`, `Document number`, `Email`, `Phone` | The person (form) | Document type is always cédula de ciudadanía |
+| `Status` | You / the bot | Empty or **Pending**: look for an appointment. **Paused**: ignore. **Booked**: set by the bot |
+| `Appointment`, `Booked at` | The bot | Written after a real booking |
 
-- `id` shows up in public logs and run names: use something like `cali-2`, never a name or
-  document number (ids with 5+ digits in a row are rejected).
-- `service` (optional) is the preferred tramite for this case (`vehiculos`); `enabled: false`
-  pauses a case; `telegram_chat` (optional) sends this case's links to another chat.
-- `cases.example.json` has one fake case per city plus a second Cali case.
+- **When it reads:** the monitor reads only `ID`, `City` and `Status` (never the personal
+  fields) at startup and after **6:00, 11:00 and 14:00** Bogotá (`DIAN_CASES_REFRESH_HOURS`).
+  To apply a change at once, restart the Render service.
+- **Booker reads:** a booker reads its own record only when it needs the person, at once for an
+  opening, or when its city appears for a watch. After a real booking it sets `Status`,
+  `Appointment` and `Booked at`.
+- **Bad data:** a record with missing or invalid data (no city, a city outside the four, a
+  phone that isn't 10 digits…) is skipped and reported once on Telegram by its `case-<ID>`.
+- **Airtable down:** if Airtable can't be read, the monitor keeps the last good copy
+  (`DIAN_CASES_CACHE_FILE`, id/city/status only), retries after 10–60 min and tells you on
+  Telegram.
+- **Quota:** the free plan allows 1,000 API calls a month. Expected use is about 250; the
+  report (`--report`) counts every call.
 
-The cases live in **`cases.json` in the repo**: Render, `booker.yml`, `booker-test.yml` and
-`monitor.yml` all read it (`DIAN_CASES_FILE=cases.json`), so adding or pausing a case is a
-commit, and Render redeploys on it. The monitor drops the personal fields; the booker reads
-only its own case. Locally: `DIAN_CASES_FILE=cases.json`. `DIAN_CASES_JSON`, if set, wins over
-the file.
-
-**The repo is public, so everything in `cases.json` is public too**, including the people's
-document numbers, emails and phones, and it stays in git history after you remove it. The
-code never logs it, but anyone can read the file.
-
-Without a cases JSON, everything works as before: one "default" case for `DIAN_CITY`
-(Medellín) with the `BOOKER_*` secrets.
+For local runs and tests, a cases JSON with the same fields in snake_case works instead
+(`DIAN_CASES_FILE` or `DIAN_CASES_JSON`; see `cases.example.json`, all fake and paused).
+`cases.json` is git-ignored. Without Airtable or a JSON, everything works as before: one
+"default" case for `DIAN_CITY` (Medellín) with the `BOOKER_*` secrets.
 
 When a city opens, you get one alert for it listing the cases still waiting. A city whose cases
 all have a booking recorded is not alerted (you get one note instead). At most
@@ -162,9 +164,8 @@ tap the captcha.
 The booker only ever picks a tramite whose name contains **its case's city**. There is no
 default option: if no tramite of that city is offered, it books nothing (`NOT_OPEN`). It
 checks the city again before the captcha and before Agendar, and refuses a real booking
-outside the four appointment cities. If several tramites of the city are open, the case's
-`service` (or the repo variable `BOOKER_SERVICE`) sets the preference (`vehiculos`:
-"Vehículos eléctricos o Híbridos" first, otherwise any other tramite of the city).
+outside the four appointment cities. It also books only the tramite of `DIAN_SERVICE`
+(`vehiculos`: "Vehículos eléctricos o Híbridos"), with no fallback to another tramite.
 
 While a city is open, the monitor checks on every poll that each of its cases has a booker and starts
 a new one if the last one ended. Each change ("started", "running (GitHub run … queued)",
@@ -184,11 +185,13 @@ can start a new booker; from the captcha on, the browser stays open for you to f
 Setup:
 - On Render: `DIAN_BOOKER=1` and `GITHUB_DISPATCH_TOKEN`. For the GitHub fallback: repo
   variable `DIAN_BOOKER=1`. Repo variable `BOOKER_DRY_RUN=1` stops before Agendar in both.
-- Cases: `cases.json` (see Cases). For the single default case, secrets `BOOKER_DOC_NUMBER`,
+- Cases (see Cases): Render env `AIRTABLE_TOKEN`; GitHub secret `AIRTABLE_TOKEN` and repo
+  variables `AIRTABLE_BASE_ID`, `AIRTABLE_TABLE`. The token is a Personal Access Token with only
+  `data.records:read` and `data.records:write` on the base. For the single default case, secrets `BOOKER_DOC_NUMBER`,
   `BOOKER_FULL_NAME`, `BOOKER_EMAIL`, `BOOKER_PHONE`, and optionally `BOOKER_DOC_TYPE`
   (default "Cédula de ciudadanía").
 - To test: **Actions → Booker test run** walks any open category as a dry run and sends you
-  the link. Give it a `case` to use that case's person and city.
+  the link. Give it a `case` (e.g. `case-3`) to use that Airtable case's person and city.
 - The GitHub fallback monitor runs one booker at a time, and only the default case's booking
   reaches Render (other cases' bookings stay in its own state).
 
@@ -221,7 +224,9 @@ your name, document, email and phone before they're written.
 
 ## Settings (environment variables)
 
-`DIAN_CASES_JSON` / `DIAN_CASES_FILE` (the cases), `DIAN_MAX_PARALLEL_BOOKERS`,
+`AIRTABLE_TOKEN` / `AIRTABLE_BASE_ID` / `AIRTABLE_TABLE`, `DIAN_CASES_REFRESH_HOURS`,
+`DIAN_CASES_CACHE_FILE`, `DIAN_SERVICE` (default `vehiculos`), `DIAN_CASES_JSON` /
+`DIAN_CASES_FILE` (local cases), `DIAN_MAX_PARALLEL_BOOKERS`,
 `DIAN_CITY` (without cases; default `medellin`), `DIAN_TIPO_PERSONA`, `DIAN_TIPO_ATENCION`, `DIAN_CATEGORIA`,
 `DIAN_RUN_BUDGET_SECONDS`, `DIAN_REALERT_SECONDS`, `DIAN_MAX_REALERTS`,
 `DIAN_FAILURES_BEFORE_ALERT`, `DIAN_HEARTBEAT_HOUR`, `DIAN_BOOKER`, `DIAN_BOOKER_REPO`,

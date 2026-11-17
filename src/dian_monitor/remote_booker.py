@@ -113,7 +113,8 @@ class GitHubBooker:
         if self.running(case):
             return False
         self._call("POST", f"workflows/{WORKFLOW}/dispatches",
-                   json={"ref": self.ref, "inputs": {"trigger": trigger, "case": case.id}})
+                   json={"ref": self.ref, "inputs": {"trigger": trigger, "case": case.id,
+                                                     "city": case.city}})
         self.dispatched[case.id] = self.monotonic()
         return True
 

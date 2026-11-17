@@ -61,8 +61,14 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           DIAN_BOOKER: ${{ vars.DIAN_BOOKER }}
           BOOKER_DRY_RUN: ${{ vars.BOOKER_DRY_RUN }}
-          # Watches every case's city; the local booker runs one case at a time.
-          DIAN_CASES_FILE: cases.json
+          # Watches every pending Airtable case's city; the local booker runs one case at a time.
+          # Each run starts a new process: read Airtable at start only if the cached copy
+          # (state/cases.json, in the Actions cache) is older than the last refresh hour.
+          # The cases live in Airtable (the token is a secret; base and table are variables).
+          AIRTABLE_TOKEN: ${{ secrets.AIRTABLE_TOKEN }}
+          AIRTABLE_BASE_ID: ${{ vars.AIRTABLE_BASE_ID }}
+          AIRTABLE_TABLE: ${{ vars.AIRTABLE_TABLE }}
+          DIAN_CASES_REFRESH_ON_START: "0"
           BOOKER_DOC_TYPE: ${{ secrets.BOOKER_DOC_TYPE }}
           BOOKER_DOC_NUMBER: ${{ secrets.BOOKER_DOC_NUMBER }}
           BOOKER_FULL_NAME: ${{ secrets.BOOKER_FULL_NAME }}

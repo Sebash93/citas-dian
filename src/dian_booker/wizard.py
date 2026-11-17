@@ -41,15 +41,19 @@ class WizardError(Exception):
     """The page did not do what we expected; a human can take over through the link."""
 
 
-def choose_service(options, city, preferred=""):
+def choose_service(options, city, preferred="", strict=False):
     """Index of the tramite to book, or None. Never a default: only a tramite whose name
     contains the city word is eligible. `preferred` is a comma-separated list of name parts
-    in order of preference (e.g. "vehiculos"); if none matches, the first eligible one."""
+    in order of preference (e.g. "vehiculos"); if none matches, the first eligible one, unless
+    `strict`: then only a preferred tramite is ever booked."""
     eligible = [i for i, o in enumerate(options) if o.strip() and mentions_city(o, city)]
-    for wish in (normalize(w) for w in preferred.split(",") if w.strip()):
+    wishes = [normalize(w) for w in preferred.split(",") if w.strip()]
+    for wish in wishes:
         match = next((i for i in eligible if wish in normalize(options[i])), None)
         if match is not None:
             return match
+    if strict and wishes:
+        return None
     return eligible[0] if eligible else None
 
 
@@ -134,7 +138,7 @@ class Wizard:
             self.log(f"PasoUno: {self.ctrl('ModalError').inner_text().strip()[:120]}")
             return None
         select, options = self.select_options("Servicios")
-        index = choose_service(options, s.city, self.service_hint)
+        index = choose_service(options, s.city, self.service_hint, strict=True)
         if index is None:
             self.log(f"PasoUno: target not offered; open: {[o for o in options if o.strip()]}")
             return None
@@ -167,10 +171,13 @@ class Wizard:
 
     def check_city(self):
         """Safety stop before the captcha and before Agendar: the chosen tramite must name
-        the target city, whatever happened earlier in the wizard."""
+        the target city (and the service, when one is set), whatever happened earlier."""
         service = self.chosen.get("servicio", "")
         if not mentions_city(service, self.settings.city):
             raise CityMismatch(f"chosen tramite does not name {self.settings.city}: {service!r}")
+        wishes = [normalize(w) for w in self.service_hint.split(",") if w.strip()]
+        if wishes and not any(w in normalize(service) for w in wishes):
+            raise CityMismatch(f"chosen tramite is not {self.service_hint!r}: {service!r}")
 
     # --- PasoDos: ciudad, sede, fecha, hora ---------------------------------
 

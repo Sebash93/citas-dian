@@ -1,10 +1,11 @@
-"""python -m dian_monitor [--once | --forever] [--budget SECONDS] [--telegram-chats | --telegram-test | --report]"""
+"""python -m dian_monitor [--once | --forever] [--budget SECONDS] [--cases | --telegram-chats | --telegram-test | --report]"""
 import argparse
 import os
 from datetime import timedelta
 
 from . import cadence, events
-from .cases import CasesError, load as load_cases
+from .airtable import Airtable, AirtableError
+from .cases import CasesError, from_json_settings
 
 from .config import Settings
 from .monitor import Monitor, log
@@ -19,6 +20,8 @@ def main(argv=None):
                         help="never stop (always-on hosting such as Render)")
     parser.add_argument("--budget", type=int, default=None,
                         help="seconds to keep polling (default: DIAN_RUN_BUDGET_SECONDS)")
+    parser.add_argument("--cases", action="store_true",
+                        help="read the cases once (Airtable or JSON) and print id, city, status")
     parser.add_argument("--telegram-chats", action="store_true",
                         help="list chat ids that messaged the bot (needs TELEGRAM_BOT_TOKEN)")
     parser.add_argument("--telegram-test", action="store_true",
@@ -33,6 +36,9 @@ def main(argv=None):
         since = cadence.now_bogota() - timedelta(days=args.days) if args.days else None
         print(events.report(events.read(path), since=since))
         return 0
+
+    if args.cases:
+        return print_cases(Settings.from_env())
 
     if args.telegram_chats:
         token = os.environ["TELEGRAM_BOT_TOKEN"].strip()
@@ -52,19 +58,41 @@ def main(argv=None):
 
     settings = Settings.from_env()
     notifier = build_notifier()
+    log(f"Watching: {settings.label} / {settings.service}")
     try:
-        cases = [c for c in load_cases(settings) if c.enabled]
-    except CasesError as e:
+        monitor = Monitor(settings, notifier)
+    except CasesError as e:  # a broken local cases JSON (Airtable problems never stop it)
         log(f"Not starting: {e}.")
         notifier.send(cases_problem(e))
         return 2
-    watched = ", ".join(f"{c.city_name} [{c.id}]" for c in cases) or "no enabled case"
-    log(f"Watching: {settings.label} / {watched}")
-    monitor = Monitor(settings, notifier, cases=cases)
     if args.forever:
         monitor.run_forever()
         return 0
     print(monitor.run(budget_seconds=args.budget, once=args.once), flush=True)
+    return 0
+
+
+def print_cases(settings):
+    """One read, routing fields only: safe to run anywhere (no personal data is printed)."""
+    airtable = Airtable.from_settings(settings)
+    try:
+        if airtable is not None:
+            cases, skipped = airtable.routing_cases()
+            source = f"Airtable table {settings.airtable_table}"
+        else:
+            cases, skipped = from_json_settings(settings), []
+            source = "the cases JSON"
+            if cases is None:
+                print("No cases source: set AIRTABLE_TOKEN + AIRTABLE_BASE_ID, or DIAN_CASES_FILE.")
+                return 2
+    except (AirtableError, CasesError) as e:
+        print(f"Could not read the cases: {e}")
+        return 1
+    print(f"{len(cases)} cases from {source}:")
+    for c in cases:
+        print(f"  {c.id:10} {c.city_name:12} {c.status}{'  (watched)' if c.enabled else ''}")
+    for problem in skipped:
+        print(f"  skipped: {problem}")
     return 0
 
 

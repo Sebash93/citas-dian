@@ -137,8 +137,8 @@ class GitHubBookerTest(unittest.TestCase):
         method, url, kwargs = gh.calls[-1]
         self.assertEqual(method, "POST")
         self.assertTrue(url.endswith("/repos/me/repo/actions/workflows/booker.yml/dispatches"))
-        self.assertEqual(kwargs["json"], {"ref": "main",
-                                          "inputs": {"trigger": "found", "case": "default"}})
+        self.assertEqual(kwargs["json"], {"ref": "main", "inputs": {
+            "trigger": "found", "case": "default", "city": "medellin"}})
         self.assertFalse(b.start(DEFAULT, "found"))  # not visible in the API yet, still "running"
         self.assertEqual(b.active(), 1)
         t[0] = 120
@@ -157,7 +157,8 @@ class GitHubBookerTest(unittest.TestCase):
         self.assertEqual(b.describe(CALI), "GitHub run None in_progress")
         self.assertFalse(b.start(CALI, "found"))
         self.assertTrue(b.start(Case("med-1", "medellin"), "found"))
-        self.assertEqual(gh.calls[-1][2]["json"]["inputs"], {"trigger": "found", "case": "med-1"})
+        self.assertEqual(gh.calls[-1][2]["json"]["inputs"],
+                         {"trigger": "found", "case": "med-1", "city": "medellin"})
         self.assertEqual(b.active(), 2)  # cali-1's run plus med-1's dispatch
         runs_calls = [c for c in gh.calls if c[1].endswith("/runs")]
         self.assertEqual(len(runs_calls), 1)  # one listing serves every case in a check

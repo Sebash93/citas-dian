@@ -28,6 +28,8 @@ def empty():
         "booker_decisions": {},
         # [{"city": c, "opened": iso, "closed": iso|None, "matches": [...]}]
         "history": [],
+        # The last read of the cases failed (so a good read sends "volví a leer").
+        "cases_problem": False,
     }
 
 

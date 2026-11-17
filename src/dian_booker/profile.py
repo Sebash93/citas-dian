@@ -35,15 +35,24 @@ class Profile:
 
     @classmethod
     def from_case(cls, case):
-        """The person of one case (cases.find); errors name the case, never a value."""
+        """The person of one case (always cédula de ciudadanía); errors name the case and the
+        field, never a value."""
         p = case.personal
-        env = {"BOOKER_DOC_NUMBER": p.get("doc_number", ""), "BOOKER_FULL_NAME": p.get("full_name", ""),
-               "BOOKER_EMAIL": p.get("email", ""), "BOOKER_PHONE": p.get("phone", ""),
-               "BOOKER_DOC_TYPE": p.get("doc_type", "")}
+        phone = re.sub(r"\D", "", p.get("phone", ""))
+        if len(phone) == 12 and phone.startswith("57"):  # +57 typed in the form
+            phone = phone[2:]
+        env = {"BOOKER_DOC_NUMBER": p.get("document_number", ""),
+               "BOOKER_FULL_NAME": p.get("full_name", ""),
+               "BOOKER_EMAIL": p.get("email", ""), "BOOKER_PHONE": phone}
         try:
-            return cls.from_env(env)
+            profile = cls.from_env(env)
+            if not profile.doc_number.isdigit():
+                raise ProfileError("BOOKER_DOC_NUMBER must be digits only")
+            if len(phone) != 10:
+                raise ProfileError("BOOKER_PHONE must have 10 digits")
+            return profile
         except ProfileError as e:
-            names = {"BOOKER_DOC_NUMBER": "doc_number", "BOOKER_FULL_NAME": "full_name",
+            names = {"BOOKER_DOC_NUMBER": "document_number", "BOOKER_FULL_NAME": "full_name",
                      "BOOKER_EMAIL": "email", "BOOKER_PHONE": "phone"}
             text = str(e)
             for old, new in names.items():

@@ -1,20 +1,23 @@
 """Booking cases: whom to book and in which city.
 
-A cases JSON (`DIAN_CASES_JSON`, or a file in `DIAN_CASES_FILE`) lists one entry per person:
+The cases come from the Airtable "Cases" table (airtable.py), or for local runs and tests from a
+cases JSON (`DIAN_CASES_JSON`, or a file in `DIAN_CASES_FILE`) with the same keys:
 
-    {"cases": [{"id": "med-1", "city": "medellin", "service": "vehiculos", "enabled": true,
-                "doc_type": "Cédula de ciudadanía", "doc_number": "...", "full_name": "...",
-                "email": "...", "phone": "...", "telegram_chat": ""}]}
+    {"cases": [{"id": "case-1", "city": "medellin", "status": "pending",
+                "full_name": "...", "document_number": "...", "email": "...", "phone": "..."}]}
 
-The monitor alerts for every city of an enabled case and starts one booker per case. It only
-needs the routing fields (id, city, service, enabled), so it never keeps the personal ones:
-`load(..., personal=False)` drops them. The booker loads its one case with `personal=True`.
+The tramite is the same for every case (settings.service, IVA vehículos), and the document type
+is always cédula de ciudadanía.
+
+The monitor only needs the routing fields (id, city, status), so it never keeps the personal
+ones: `parse(..., personal=False)` drops them, and from Airtable it never asks for them. The
+booker loads its one case with the personal fields.
 
 The case id appears in public logs, events and GitHub run names, so it must not carry personal
 data: short, lowercase letters, digits and dashes, and no runs of 5+ digits (a document number).
 Error messages name a case by its position and id only, never by a personal value.
 
-Without a cases JSON there is one "default" case for DIAN_CITY, with the person from the
+Without any cases source there is one "default" case for DIAN_CITY, with the person from the
 BOOKER_* environment variables (how the project worked before cases).
 """
 import json
@@ -29,8 +32,10 @@ from .check import normalize
 ALLOWED_CITIES = {"bogota": "Bogotá", "bucaramanga": "Bucaramanga", "cali": "Cali",
                   "medellin": "Medellín"}
 DEFAULT_ID = "default"
-ROUTING_FIELDS = ("id", "city", "service", "enabled", "telegram_chat")
-PERSONAL_FIELDS = ("doc_type", "doc_number", "full_name", "email", "phone")
+PENDING, PAUSED, BOOKED = "pending", "paused", "booked"
+STATUSES = (PENDING, PAUSED, BOOKED)
+ROUTING_FIELDS = ("id", "city", "status")
+PERSONAL_FIELDS = ("full_name", "document_number", "email", "phone")
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,23}$")
 
 
@@ -46,10 +51,13 @@ def city_name(city):
 class Case:
     id: str
     city: str                 # normalized, e.g. "medellin"
-    service: str = ""         # preferred tramite name parts, comma-separated (e.g. "vehiculos")
-    enabled: bool = True
-    telegram_chat: str = ""   # where the booker sends this case's links; empty = TELEGRAM_CHAT_ID
+    status: str = PENDING     # pending: look for an appointment; paused: ignore; booked: done
+    record_id: str = ""       # Airtable record id (not personal), to write the booking back
     personal: dict = field(default_factory=dict, repr=False, compare=False, hash=False)
+
+    @property
+    def enabled(self):
+        return self.status == PENDING
 
     @property
     def city_name(self):
@@ -58,7 +66,34 @@ class Case:
     @property
     def who(self):
         """How messages name the case: the city, plus the id when there are cases."""
-        return self.city_name if self.id == DEFAULT_ID else f"{self.city_name} (caso {self.id})"
+        return self.city_name if self.id == DEFAULT_ID else f"{self.city_name} ({self.id})"
+
+    def routing(self):
+        """What may be stored or logged: no personal data."""
+        return {"id": self.id, "city": self.city, "status": self.status,
+                "record_id": self.record_id}
+
+
+def check_id(cid, where):
+    if not isinstance(cid, str) or not ID_RE.match(cid) or re.search(r"\d{5}", cid) \
+            or cid == DEFAULT_ID:
+        raise CasesError(f"{where}: id must be 1-24 lowercase letters, digits or dashes, "
+                         "with no personal data (no long numbers)")
+    return cid
+
+
+def check_city(city, where):
+    city = normalize(city or "")
+    if city not in ALLOWED_CITIES:
+        raise CasesError(f"{where}: city must be one of {sorted(ALLOWED_CITIES)}")
+    return city
+
+
+def check_status(status, where):
+    status = normalize(status or PENDING)
+    if status not in STATUSES:
+        raise CasesError(f"{where}: status must be one of {list(STATUSES)}")
+    return status
 
 
 def parse(text, personal=False):
@@ -73,36 +108,23 @@ def parse(text, personal=False):
     for n, item in enumerate(items, 1):
         if not isinstance(item, dict):
             raise CasesError(f"case #{n} is not an object")
-        cid = item.get("id")
-        if not isinstance(cid, str) or not ID_RE.match(cid) or re.search(r"\d{5}", cid) \
-                or cid == DEFAULT_ID:
-            raise CasesError(f"case #{n}: id must be 1-24 lowercase letters, digits or dashes, "
-                             "with no personal data (no long numbers)")
+        cid = check_id(item.get("id"), f"case #{n}")
         if cid in seen:
             raise CasesError(f"case #{n}: duplicate id {cid!r}")
         seen.add(cid)
-        unknown = sorted(set(item) - set(ROUTING_FIELDS) - set(PERSONAL_FIELDS))
+        unknown = sorted(set(item) - set(ROUTING_FIELDS) - set(PERSONAL_FIELDS) - {"record_id"})
         if unknown:
             raise CasesError(f"case {cid!r}: unknown fields {unknown}")
-        city = normalize(item.get("city") or "")
-        if city not in ALLOWED_CITIES:
-            raise CasesError(f"case {cid!r}: city must be one of {sorted(ALLOWED_CITIES)}")
-        enabled = item.get("enabled", True)
-        if not isinstance(enabled, bool):
-            raise CasesError(f"case {cid!r}: enabled must be true or false")
         cases.append(Case(
-            id=cid, city=city, service=str(item.get("service") or "").strip(), enabled=enabled,
-            telegram_chat=str(item.get("telegram_chat") or "").strip(),
+            id=cid, city=check_city(item.get("city"), f"case {cid!r}"),
+            status=check_status(item.get("status"), f"case {cid!r}"),
+            record_id=str(item.get("record_id") or ""),
             personal={k: str(item[k]) for k in PERSONAL_FIELDS if item.get(k)} if personal else {}))
     return cases
 
 
-def configured(settings):
-    return bool(settings.cases_json or settings.cases_file)
-
-
-def load(settings, personal=False):
-    """All cases from the settings, or the one "default" case when none are configured."""
+def from_json_settings(settings, personal=False):
+    """Cases from DIAN_CASES_JSON / DIAN_CASES_FILE, or None when neither is set."""
     if settings.cases_json:
         return parse(settings.cases_json, personal)
     if settings.cases_file:
@@ -111,21 +133,11 @@ def load(settings, personal=False):
                 return parse(f.read(), personal)
         except OSError as e:
             raise CasesError(f"cannot read DIAN_CASES_FILE ({type(e).__name__})") from None
-    return [Case(DEFAULT_ID, normalize(settings.city))]
+    return None
 
 
-def find(settings, case_id):
-    """The one case to book, with its personal data. Raises CasesError."""
-    if not configured(settings):
-        if case_id != DEFAULT_ID:
-            raise CasesError(f"case {case_id!r} given but no cases JSON is configured")
-        return load(settings)[0]
-    case = next((c for c in load(settings, personal=True) if c.id == case_id), None)
-    if case is None:
-        raise CasesError(f"case {case_id!r} is not in the cases JSON")
-    if not case.enabled:
-        raise CasesError(f"case {case_id!r} is disabled")
-    return case
+def default_case(settings):
+    return Case(DEFAULT_ID, normalize(settings.city))
 
 
 def booking_file(settings, case_id):

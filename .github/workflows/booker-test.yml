@@ -3,7 +3,7 @@ name: Booker test run
 # Runs the booker by hand to check the live link, the wizard and timings. Dry run by default:
 # it never clicks Agendar. Only tramites whose name contains the city are ever chosen, and a
 # real (non-dry) run is refused outside Bogotá, Bucaramanga, Cali and Medellín.
-# With `case`, the person and city come from that case in cases.json.
+# With `case` (e.g. case-3), the person and city come from that Airtable case.
 on:
   workflow_dispatch:
     inputs:
@@ -14,7 +14,7 @@ on:
         description: "13 = Devoluciones, 7 = RUT (see config.py)"
         default: "13"
       case:
-        description: "Optional: case id from cases.json (sets the person and the city)"
+        description: "Optional: Airtable case id, e.g. case-3 (sets the person and the city)"
         default: ""
       city:
         description: "City to book without a case (videoatención names carry it; presencial picks it in PasoDos)"
@@ -58,13 +58,15 @@ jobs:
           DIAN_CITY: ${{ inputs.city }}
           DIAN_BOOKING_FILE: /tmp/booking-test.json
           BOOKER_CASE: ${{ inputs.case || 'default' }}
-          DIAN_CASES_FILE: ${{ inputs.case && 'cases.json' || '' }}
+          AIRTABLE_TOKEN: ${{ inputs.case && secrets.AIRTABLE_TOKEN || '' }}
+          AIRTABLE_BASE_ID: ${{ vars.AIRTABLE_BASE_ID }}
+          AIRTABLE_TABLE: ${{ vars.AIRTABLE_TABLE }}
           BOOKER_DOC_TYPE: ${{ secrets.BOOKER_DOC_TYPE }}
           BOOKER_DOC_NUMBER: ${{ secrets.BOOKER_DOC_NUMBER }}
           BOOKER_FULL_NAME: ${{ secrets.BOOKER_FULL_NAME }}
           BOOKER_EMAIL: ${{ secrets.BOOKER_EMAIL }}
           BOOKER_PHONE: ${{ secrets.BOOKER_PHONE }}
-          BOOKER_SERVICE: ${{ inputs.service }}
+          DIAN_SERVICE: ${{ inputs.service || 'vehiculos' }}
           BOOKER_DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
           BOOKER_WAIT_MINUTES: "3"
           DIAN_EVENTS_FILE: events/booker-test.jsonl

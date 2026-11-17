@@ -7,3 +7,5 @@ captures/
 booker/
 events/
 
+# Local cases (personal data): the real cases live in Airtable
+cases.json

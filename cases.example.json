@@ -1,64 +1,49 @@
 {
   "cases": [
     {
-      "id": "bog-1",
+      "id": "case-1",
       "city": "bogota",
-      "service": "",
-      "enabled": true,
-      "doc_type": "Cédula de ciudadanía",
-      "doc_number": "1000000001",
+      "status": "paused",
       "full_name": "Prueba Bogota Uno",
-      "email": "prueba.bogota1@example.com",
-      "phone": "3000000001",
-      "telegram_chat": ""
+      "document_number": "1000000001",
+      "email": "prueba1@example.com",
+      "phone": "3000000001"
     },
     {
-      "id": "bga-1",
+      "id": "case-2",
       "city": "bucaramanga",
-      "service": "",
-      "enabled": true,
-      "doc_type": "Cédula de ciudadanía",
-      "doc_number": "1000000002",
+      "status": "paused",
       "full_name": "Prueba Bucaramanga Uno",
-      "email": "prueba.bucaramanga1@example.com",
-      "phone": "3000000002",
-      "telegram_chat": ""
+      "document_number": "1000000002",
+      "email": "prueba2@example.com",
+      "phone": "3000000002"
     },
     {
-      "id": "cali-1",
+      "id": "case-3",
       "city": "cali",
-      "service": "vehiculos",
-      "enabled": true,
-      "doc_type": "Cédula de ciudadanía",
-      "doc_number": "1000000003",
+      "status": "paused",
       "full_name": "Prueba Cali Uno",
-      "email": "prueba.cali1@example.com",
-      "phone": "3000000003",
-      "telegram_chat": ""
+      "document_number": "1000000003",
+      "email": "prueba3@example.com",
+      "phone": "3000000003"
     },
     {
-      "id": "cali-2",
+      "id": "case-4",
       "city": "cali",
-      "service": "",
-      "enabled": true,
-      "doc_type": "Cédula de ciudadanía",
-      "doc_number": "1000000004",
+      "status": "paused",
       "full_name": "Prueba Cali Dos",
-      "email": "prueba.cali2@example.com",
-      "phone": "3000000004",
-      "telegram_chat": ""
+      "document_number": "1000000004",
+      "email": "prueba4@example.com",
+      "phone": "3000000004"
     },
     {
-      "id": "med-1",
+      "id": "case-5",
       "city": "medellin",
-      "service": "vehiculos",
-      "enabled": true,
-      "doc_type": "Cédula de ciudadanía",
-      "doc_number": "1000000005",
+      "status": "paused",
       "full_name": "Prueba Medellin Uno",
-      "email": "prueba.medellin1@example.com",
-      "phone": "3000000005",
-      "telegram_chat": ""
+      "document_number": "1000000005",
+      "email": "prueba5@example.com",
+      "phone": "3000000005"
     }
   ]
 }
