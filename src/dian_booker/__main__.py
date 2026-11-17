@@ -71,18 +71,8 @@ def resolve(settings, case_id, city, events):
         return CaseSource(Case(case.id, case.city, record_id=case.record_id),
                           lambda: Profile.from_case(fetch()), on_booked)
 
-    listed = cases_mod.from_json_settings(settings, personal=True)
-    if listed is not None:
-        case = next((c for c in listed if c.id == case_id), None)
-        if case is None:
-            raise CasesError(f"case {case_id!r} is not in the cases JSON")
-        if not case.enabled:
-            raise CasesError(f"case {case_id!r} is {case.status}")
-        profile = Profile.from_case(case)  # local file: check the person at once
-        return CaseSource(Case(case.id, case.city), lambda: profile)
-
     if case_id != DEFAULT_ID:
-        raise CasesError(f"case {case_id!r} given but no cases source is configured")
+        raise CasesError(f"case {case_id!r} given but Airtable is not configured")
     profile = Profile.from_env()
     return CaseSource(cases_mod.default_case(settings), lambda: profile)
 

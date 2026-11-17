@@ -1,26 +1,18 @@
 """Booking cases: whom to book and in which city.
 
-The cases come from the Airtable "Cases" table (airtable.py), or for local runs and tests from a
-cases JSON (`DIAN_CASES_JSON`, or a file in `DIAN_CASES_FILE`) with the same keys:
+The cases come from the Airtable "Cases" table (airtable.py). The tramite is the same for every
+case (settings.service, IVA vehículos), and the document type is always cédula de ciudadanía.
 
-    {"cases": [{"id": "case-1", "city": "medellin", "status": "pending",
-                "full_name": "...", "document_number": "...", "email": "...", "phone": "..."}]}
-
-The tramite is the same for every case (settings.service, IVA vehículos), and the document type
-is always cédula de ciudadanía.
-
-The monitor only needs the routing fields (id, city, status), so it never keeps the personal
-ones: `parse(..., personal=False)` drops them, and from Airtable it never asks for them. The
-booker loads its one case with the personal fields.
+The monitor only needs the routing fields (id, city, status), so it never asks Airtable for the
+personal ones. The booker loads its one case with the personal fields (`Case.personal`).
 
 The case id appears in public logs, events and GitHub run names, so it must not carry personal
 data: short, lowercase letters, digits and dashes, and no runs of 5+ digits (a document number).
-Error messages name a case by its position and id only, never by a personal value.
+Error messages name a case by its id only, never by a personal value.
 
-Without any cases source there is one "default" case for DIAN_CITY, with the person from the
+Without Airtable there is one "default" case for DIAN_CITY, with the person from the
 BOOKER_* environment variables (how the project worked before cases).
 """
-import json
 import os
 import re
 from dataclasses import dataclass, field
@@ -34,8 +26,6 @@ ALLOWED_CITIES = {"bogota": "Bogotá", "bucaramanga": "Bucaramanga", "cali": "Ca
 DEFAULT_ID = "default"
 PENDING, PAUSED, BOOKED = "pending", "paused", "booked"
 STATUSES = (PENDING, PAUSED, BOOKED)
-ROUTING_FIELDS = ("id", "city", "status")
-PERSONAL_FIELDS = ("full_name", "document_number", "email", "phone")
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,23}$")
 
 
@@ -94,46 +84,6 @@ def check_status(status, where):
     if status not in STATUSES:
         raise CasesError(f"{where}: status must be one of {list(STATUSES)}")
     return status
-
-
-def parse(text, personal=False):
-    try:
-        data = json.loads(text)
-    except ValueError:
-        raise CasesError("the cases JSON is not valid JSON") from None  # never echo the text
-    items = data.get("cases") if isinstance(data, dict) else data
-    if not isinstance(items, list) or not items:
-        raise CasesError('the cases JSON needs a non-empty "cases" list')
-    cases, seen = [], set()
-    for n, item in enumerate(items, 1):
-        if not isinstance(item, dict):
-            raise CasesError(f"case #{n} is not an object")
-        cid = check_id(item.get("id"), f"case #{n}")
-        if cid in seen:
-            raise CasesError(f"case #{n}: duplicate id {cid!r}")
-        seen.add(cid)
-        unknown = sorted(set(item) - set(ROUTING_FIELDS) - set(PERSONAL_FIELDS) - {"record_id"})
-        if unknown:
-            raise CasesError(f"case {cid!r}: unknown fields {unknown}")
-        cases.append(Case(
-            id=cid, city=check_city(item.get("city"), f"case {cid!r}"),
-            status=check_status(item.get("status"), f"case {cid!r}"),
-            record_id=str(item.get("record_id") or ""),
-            personal={k: str(item[k]) for k in PERSONAL_FIELDS if item.get(k)} if personal else {}))
-    return cases
-
-
-def from_json_settings(settings, personal=False):
-    """Cases from DIAN_CASES_JSON / DIAN_CASES_FILE, or None when neither is set."""
-    if settings.cases_json:
-        return parse(settings.cases_json, personal)
-    if settings.cases_file:
-        try:
-            with open(settings.cases_file, encoding="utf-8") as f:
-                return parse(f.read(), personal)
-        except OSError as e:
-            raise CasesError(f"cannot read DIAN_CASES_FILE ({type(e).__name__})") from None
-    return None
 
 
 def default_case(settings):

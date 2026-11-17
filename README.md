@@ -126,9 +126,9 @@ devolución tramite is never booked, and its openings are only logged.
 - **Quota:** the free plan allows 1,000 API calls a month. Expected use is about 250; the
   report (`--report`) counts every call.
 
-For local runs and tests, a cases JSON with the same fields in snake_case works instead
-(`DIAN_CASES_FILE` or `DIAN_CASES_JSON`; see `cases.example.json`, all fake and paused).
-`cases.json` is git-ignored. Without Airtable or a JSON, everything works as before: one
+For local runs, copy `.env.example` to `.env` (it points at the test base "Citas DIAN –
+Pruebas", fake people only) and check the connection with
+`PYTHONPATH=src python3 -m dian_monitor --cases`. Without Airtable, everything works as before: one
 "default" case for `DIAN_CITY` (Medellín) with the `BOOKER_*` secrets.
 
 When a city opens, you get one alert for it listing the cases still waiting. A city whose cases
@@ -225,8 +225,7 @@ your name, document, email and phone before they're written.
 ## Settings (environment variables)
 
 `AIRTABLE_TOKEN` / `AIRTABLE_BASE_ID` / `AIRTABLE_TABLE`, `DIAN_CASES_REFRESH_HOURS`,
-`DIAN_CASES_CACHE_FILE`, `DIAN_SERVICE` (default `vehiculos`), `DIAN_CASES_JSON` /
-`DIAN_CASES_FILE` (local cases), `DIAN_MAX_PARALLEL_BOOKERS`,
+`DIAN_CASES_CACHE_FILE`, `DIAN_SERVICE` (default `vehiculos`), `DIAN_MAX_PARALLEL_BOOKERS`,
 `DIAN_CITY` (without cases; default `medellin`), `DIAN_TIPO_PERSONA`, `DIAN_TIPO_ATENCION`, `DIAN_CATEGORIA`,
 `DIAN_RUN_BUDGET_SECONDS`, `DIAN_REALERT_SECONDS`, `DIAN_MAX_REALERTS`,
 `DIAN_FAILURES_BEFORE_ALERT`, `DIAN_HEARTBEAT_HOUR`, `DIAN_BOOKER`, `DIAN_BOOKER_REPO`,

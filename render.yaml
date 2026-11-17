@@ -52,7 +52,7 @@ services:
         value: tblV2tI4bwzWXDqkF
       # Last good read (routing only), used when Airtable can't be read at start.
       - key: DIAN_CASES_CACHE_FILE
-        value: /var/data/state/cases.json
+        value: /var/data/state/cases-cache.json
       # Most booker runs at once (default 4).
       - key: DIAN_MAX_PARALLEL_BOOKERS
         sync: false

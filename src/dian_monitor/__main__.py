@@ -5,11 +5,10 @@ from datetime import timedelta
 
 from . import cadence, events
 from .airtable import Airtable, AirtableError
-from .cases import CasesError, from_json_settings
 
 from .config import Settings
 from .monitor import Monitor, log
-from .notify import build_notifier, cases_problem, find_chat_ids, test_message
+from .notify import build_notifier, find_chat_ids, test_message
 
 
 def main(argv=None):
@@ -21,7 +20,7 @@ def main(argv=None):
     parser.add_argument("--budget", type=int, default=None,
                         help="seconds to keep polling (default: DIAN_RUN_BUDGET_SECONDS)")
     parser.add_argument("--cases", action="store_true",
-                        help="read the cases once (Airtable or JSON) and print id, city, status")
+                        help="read the cases once from Airtable and print id, city, status")
     parser.add_argument("--telegram-chats", action="store_true",
                         help="list chat ids that messaged the bot (needs TELEGRAM_BOT_TOKEN)")
     parser.add_argument("--telegram-test", action="store_true",
@@ -59,12 +58,7 @@ def main(argv=None):
     settings = Settings.from_env()
     notifier = build_notifier()
     log(f"Watching: {settings.label} / {settings.service}")
-    try:
-        monitor = Monitor(settings, notifier)
-    except CasesError as e:  # a broken local cases JSON (Airtable problems never stop it)
-        log(f"Not starting: {e}.")
-        notifier.send(cases_problem(e))
-        return 2
+    monitor = Monitor(settings, notifier)  # Airtable problems never stop it
     if args.forever:
         monitor.run_forever()
         return 0
@@ -75,20 +69,15 @@ def main(argv=None):
 def print_cases(settings):
     """One read, routing fields only: safe to run anywhere (no personal data is printed)."""
     airtable = Airtable.from_settings(settings)
+    if airtable is None:
+        print("Airtable is not configured: set AIRTABLE_TOKEN and AIRTABLE_BASE_ID.")
+        return 2
     try:
-        if airtable is not None:
-            cases, skipped = airtable.routing_cases()
-            source = f"Airtable table {settings.airtable_table}"
-        else:
-            cases, skipped = from_json_settings(settings), []
-            source = "the cases JSON"
-            if cases is None:
-                print("No cases source: set AIRTABLE_TOKEN + AIRTABLE_BASE_ID, or DIAN_CASES_FILE.")
-                return 2
-    except (AirtableError, CasesError) as e:
+        cases, skipped = airtable.routing_cases()
+    except AirtableError as e:
         print(f"Could not read the cases: {e}")
         return 1
-    print(f"{len(cases)} cases from {source}:")
+    print(f"{len(cases)} cases from Airtable table {settings.airtable_table}:")
     for c in cases:
         print(f"  {c.id:10} {c.city_name:12} {c.status}{'  (watched)' if c.enabled else ''}")
     for problem in skipped:

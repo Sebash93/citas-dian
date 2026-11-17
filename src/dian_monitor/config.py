@@ -23,13 +23,13 @@ class Settings:
     tipo_atencion: str = "2"
     categoria: str = "13"
     # Accent/case-insensitive city matched against the "<City> - ..." prefix of each tramite.
-    # Used only without cases (one "default" case); with cases, each case has its city.
+    # Used only without Airtable (one "default" case); with cases, each case has its city.
     city: str = "medellin"
     # The one tramite every case is for: only tramites whose name contains it are watched and
     # booked, with no fallback to another tramite of the city.
     service: str = "vehiculos"
-    # The cases (people to book and their cities, see cases.py). Airtable when a token and base
-    # are set; otherwise an inline JSON or a file (local runs and tests).
+    # The cases (people to book and their cities) come from Airtable when a token and base are
+    # set (see airtable.py); otherwise there is one "default" case for `city`.
     airtable_token: str = field(default="", repr=False)  # secret: never logged
     airtable_base: str = ""
     airtable_table: str = "Cases"   # name or tbl… id
@@ -39,9 +39,7 @@ class Settings:
     # The GitHub fallback monitor starts every ~20 min, so it turns this off to save calls.
     cases_refresh_on_start: bool = True
     # Last good read (routing only: id, city, status; no personal data), used if Airtable fails.
-    cases_cache_file: str = "state/cases.json"
-    cases_json: str = ""
-    cases_file: str = ""
+    cases_cache_file: str = "state/cases-cache.json"
 
     state_file: str = "state/state.json"
     captures_dir: str = "captures"
@@ -94,8 +92,6 @@ class Settings:
                 if h.strip()),
             cases_refresh_on_start=_flag("DIAN_CASES_REFRESH_ON_START", cls.cases_refresh_on_start),
             cases_cache_file=_env("DIAN_CASES_CACHE_FILE", cls.cases_cache_file),
-            cases_json=_env("DIAN_CASES_JSON", cls.cases_json),
-            cases_file=_env("DIAN_CASES_FILE", cls.cases_file),
             state_file=_env("DIAN_STATE_FILE", cls.state_file),
             captures_dir=_env("DIAN_CAPTURES_DIR", cls.captures_dir),
             run_budget_seconds=int(_env("DIAN_RUN_BUDGET_SECONDS", cls.run_budget_seconds)),

@@ -21,7 +21,6 @@ from dian_monitor.config import Settings  # noqa: E402
 from test_booker import make  # noqa: E402
 from test_monitor import FRIDAY, Clock, FakeResponse  # noqa: E402
 
-ROOT = os.path.join(os.path.dirname(__file__), "..")
 MED = "“Medellín - Solicitud de devolución y/o compensación Vehículos eléctricos”"
 CALI = "“Cali - Solicitud de devolución y/o compensación Vehículos eléctricos”"
 BOG = "“Bogotá D.C. - Solicitud de devolución y/o compensación Vehículos eléctricos”"
@@ -37,11 +36,6 @@ def colas_with(*names):
     return {"Encontrado": True, "DetalleAdicional": "manejadorEncontroColas",
             "ObjetosEncontrados": [[{"Nombre": n, "Requisitos": "Bogotá, Cali y Medellín"}
                                     for n in names]]}
-
-
-def person(cid, city, **extra):
-    return {"id": cid, "city": city, "full_name": "Ana Pérez", "document_number": "1017234567",
-            "email": "ana@example.com", "phone": "3001234567", **extra}
 
 
 CASES = [Case("case-1", "medellin"), Case("case-2", "cali"), Case("case-3", "cali"),
@@ -88,51 +82,30 @@ def airtable(fake):
     return Airtable(TOKEN, "appXXXXXXXXXXXXXX", "Cases", session=fake)
 
 
-class ParseTest(unittest.TestCase):
-    def test_example_file_is_valid(self):
-        with open(os.path.join(ROOT, "cases.example.json"), encoding="utf-8") as f:
-            parsed = cases.parse(f.read(), personal=True)
-        self.assertEqual(sorted({c.city for c in parsed}),
-                         ["bogota", "bucaramanga", "cali", "medellin"])
-        self.assertTrue(all(c.status == "paused" for c in parsed))  # fake people: never booked
-        for case in parsed:
-            Profile.from_case(case)
+def personal_case(**extra):
+    return Case("case-1", "cali", personal={
+        "full_name": "Ana Pérez", "document_number": "1017234567", "email": "ana@example.com",
+        "phone": "3001234567", **extra})
 
-    def test_monitor_never_keeps_personal_data(self):
-        text = json.dumps({"cases": [person("case-1", "Medellín")]})
-        routing = cases.parse(text)[0]
-        self.assertEqual((routing.id, routing.city, routing.status),
-                         ("case-1", "medellin", "pending"))
-        self.assertEqual(routing.personal, {})
-        full = cases.parse(text, personal=True)[0]
-        self.assertEqual(full.personal["document_number"], "1017234567")
-        self.assertNotIn("1017234567", repr(full))
 
-    def test_rejects_bad_files_without_echoing_personal_data(self):
-        bad = [
-            "not json 1017234567",
-            json.dumps({"cases": []}),
-            json.dumps({"cases": [person("1017234567", "cali")]}),   # id is a document number
-            json.dumps({"cases": [person("Ana Pérez", "cali")]}),
-            json.dumps({"cases": [person("c1", "cali"), person("c1", "cali")]}),
-            json.dumps({"cases": [person("c1", "pasto")]}),           # no appointments there
-            json.dumps({"cases": [person("c1", "cali", ciudad="cali")]}),  # typo'd field
-            json.dumps({"cases": [person("c1", "cali", status="maybe")]}),
-            json.dumps({"cases": [person("default", "cali")]}),
-        ]
-        for text in bad:
-            with self.assertRaises(CasesError, msg=text) as ctx:
-                cases.parse(text)
-            for leak in LEAKS:
-                self.assertNotIn(leak, str(ctx.exception))
+class CaseTest(unittest.TestCase):
+    def test_personal_data_never_shows_in_repr(self):
+        self.assertNotIn("1017234567", repr(personal_case()))
+        self.assertNotIn("1017234567", repr(personal_case().routing()))
 
-    def test_status_decides_what_is_watched(self):
-        text = json.dumps({"cases": [person("c1", "cali"), person("c2", "cali", status="Paused"),
-                                     person("c3", "cali", status="booked")]})
-        self.assertEqual([c.enabled for c in cases.parse(text)], [True, False, False])
+    def test_ids_and_cities_are_validated_without_echoing_values(self):
+        for cid in ("1017234567", "Ana Pérez", "default", ""):
+            with self.assertRaises(CasesError) as ctx:
+                cases.check_id(cid, "case")
+            self.assertNotIn("1017234567", str(ctx.exception))
+        self.assertEqual(cases.check_id("case-12", "case"), "case-12")
+        self.assertEqual(cases.check_city("Medellín", "case-1"), "medellin")
+        with self.assertRaises(CasesError):
+            cases.check_city("Pasto", "case-1")  # no appointments needed there
+        with self.assertRaises(CasesError):
+            cases.check_status("maybe", "case-1")
 
     def test_default_case_and_per_case_files(self):
-        self.assertIsNone(cases.from_json_settings(Settings()))
         self.assertEqual(cases.default_case(Settings(city="Medellín")), Case("default", "medellin"))
         self.assertEqual(cases.booking_file(Settings(), "default"), "state/booking.json")
         self.assertEqual(cases.booking_file(Settings(), "case-1"), "state/booking-case-1.json")
@@ -140,10 +113,8 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(cases.booked_artifact("case-1"), "booking-booked-case-1")
 
     def test_profile_is_cedula_with_clean_digits(self):
-        case = cases.parse(json.dumps({"cases": [person("c1", "cali", phone="+57 300 123 4567",
-                                                        document_number="1.017.234.567")]}),
-                           personal=True)[0]
-        p = Profile.from_case(case)
+        p = Profile.from_case(personal_case(phone="+57 300 123 4567",
+                                            document_number="1.017.234.567"))
         self.assertEqual((p.doc_number, p.phone, p.doc_type),
                          ("1017234567", "3001234567", "Cédula de ciudadanía"))
 
@@ -151,11 +122,9 @@ class ParseTest(unittest.TestCase):
         for extra, message in (({"email": "no-at-sign"}, "email is not an email"),
                                ({"phone": "300 12"}, "phone must have 10 digits"),
                                ({"document_number": "AB123"}, "document_number must be digits")):
-            case = cases.parse(json.dumps({"cases": [person("c1", "cali", **extra)]}),
-                               personal=True)[0]
             with self.assertRaises(ProfileError) as ctx:
-                Profile.from_case(case)
-            self.assertIn(f"case 'c1': {message}", str(ctx.exception))
+                Profile.from_case(personal_case(**extra))
+            self.assertIn(f"case 'case-1': {message}", str(ctx.exception))
             for value in extra.values():
                 self.assertNotIn(value, str(ctx.exception))
 
@@ -172,6 +141,12 @@ class AirtableTest(unittest.TestCase):
         self.assertEqual(fake.calls[0][2]["fields[]"], ["ID", "City", "Status"])
         self.assertTrue(all(c.personal == {} for c in got))
 
+    def test_status_decides_what_is_watched(self):
+        fake = FakeAirtable([record(1, "Cali"), record(2, "Cali", "Paused"),
+                             record(3, "Cali", "Booked"), record(4, "Cali", "Pending")])
+        got, _ = airtable(fake).routing_cases()
+        self.assertEqual([c.enabled for c in got], [True, False, False, True])
+
     def test_invalid_records_are_skipped_not_fatal(self):
         fake = FakeAirtable([record(1, "Medellín"), record(2, "Pasto"),
                              {"id": "recX", "fields": {"City": "Cali"}}])
@@ -179,6 +154,8 @@ class AirtableTest(unittest.TestCase):
         self.assertEqual([c.id for c in got], ["case-1"])
         self.assertEqual(len(skipped), 2)
         self.assertIn("case-2", skipped[0])
+        for leak in LEAKS:
+            self.assertNotIn(leak, " ".join(skipped))
 
     def test_case_reads_one_record_with_its_person(self):
         fake = FakeAirtable([record(1, "Medellín"), record(7, "Cali")])
@@ -377,14 +354,18 @@ class MultiCityMonitorTest(unittest.TestCase):
         self.assertEqual(self.alerts(mon), [])
         self.assertEqual(fake.started_cases, [("case-3", "watch")])
 
-    def test_no_personal_data_in_events_logs_or_state(self):
-        text = json.dumps({"cases": [person("case-1", "medellin")]})
+    def test_no_personal_data_in_events_logs_state_or_cache(self):
+        fake = FakeAirtable([record(1, "Medellín"), record(2, "Pasto")])
+        cache = os.path.join(tempfile.mkdtemp(), "cases-cache.json")
         out = StringIO()
         with redirect_stdout(out):
-            mon, _ = make([colas_with(MED)], cases_json=text)
+            feed = CasesFeed(airtable(fake), (6, 11, 14), cache, Clock(FRIDAY), print)
+            mon, _ = make([colas_with(MED)], feed=feed)
             mon.poll()
-        logged = out.getvalue() + open(mon.settings.events_file, encoding="utf-8").read() \
-            + open(mon.settings.state_file, encoding="utf-8").read()
+        logged = "".join([out.getvalue()] + [m.text for m in mon.notifier.sent] + [
+            open(f, encoding="utf-8").read()
+            for f in (mon.settings.events_file, mon.settings.state_file, cache)])
+        self.assertIn("case-1", logged)
         for leak in LEAKS:
             self.assertNotIn(leak, logged)
 
@@ -476,19 +457,29 @@ class BookerCaseTest(unittest.TestCase):
             os.environ.clear()
             os.environ.update(old_env)
 
+    def with_airtable(self, fake):
+        import dian_monitor.airtable as at
+        old = at.requests.Session
+        at.requests.Session = lambda: fake
+        self.addCleanup(setattr, at.requests, "Session", old)
+        return {"AIRTABLE_TOKEN": TOKEN, "AIRTABLE_BASE_ID": "appXXXXXXXXXXXXXX"}
+
     def test_unknown_or_paused_case_is_refused_and_reported(self):
-        text = json.dumps({"cases": [person("case-1", "cali", status="paused")]})
-        for cid in ("nobody", "case-1"):
-            code, out = self.run_main(["--trigger", "found", "--case", cid],
-                                      DIAN_CASES_JSON=text, BOOKER_DRY_RUN="")
-            self.assertEqual(code, 2)
+        env = self.with_airtable(FakeAirtable([record(1, "Cali", "Paused")]))
+        for cid in ("case-9", "case-1", "nobody"):
+            code, out = self.run_main(["--trigger", "found", "--case", cid], **env,
+                                      BOOKER_DRY_RUN="")
+            self.assertEqual(code, 2, cid)
             self.assertIn("no arrancó", out)  # a Telegram note, not only a log line
             self.assertNotIn("1017234567", out)
 
+    def test_case_without_airtable_is_refused(self):
+        code, _ = self.run_main(["--trigger", "found", "--case", "case-1"], BOOKER_DRY_RUN="")
+        self.assertEqual(code, 2)
+
     def test_real_booking_needs_the_vehiculos_tramite(self):
-        text = json.dumps({"cases": [person("case-1", "cali")]})
-        code, _ = self.run_main(["--case", "case-1", "--service", "persona natural"],
-                                DIAN_CASES_JSON=text, BOOKER_DRY_RUN="")
+        from test_booker import ENV
+        code, _ = self.run_main(["--service", "persona natural"], **ENV, BOOKER_DRY_RUN="")
         self.assertEqual(code, 2)
 
     def test_airtable_case_reads_its_person_lazily_and_records_the_booking(self):
@@ -505,16 +496,10 @@ class BookerCaseTest(unittest.TestCase):
                 seen["on_booked"]({"fecha": "martes 18 nov", "hora": "8:00 AM"})
                 return "BOOKED"
 
-        import dian_monitor.airtable as at
-        old = at.requests.Session
-        at.requests.Session = lambda: fake
-        try:
-            code, out = self.run_main(["--trigger", "watch", "--case", "case-3", "--city", "cali"],
-                                      FakeBooker, AIRTABLE_TOKEN=TOKEN,
-                                      AIRTABLE_BASE_ID="appXXXXXXXXXXXXXX", BOOKER_DRY_RUN="",
-                                      DIAN_BOOKING_FILE="booked/booking.json")
-        finally:
-            at.requests.Session = old
+        env = self.with_airtable(fake)
+        code, out = self.run_main(["--trigger", "watch", "--case", "case-3", "--city", "cali"],
+                                  FakeBooker, **env, BOOKER_DRY_RUN="",
+                                  DIAN_BOOKING_FILE="booked/booking.json")
         self.assertEqual(code, 0)
         self.assertEqual(seen["calls_before_profile"], 0)  # no call until the person is needed
         self.assertIsNone(seen["profile"])
@@ -528,19 +513,13 @@ class BookerCaseTest(unittest.TestCase):
         self.assertNotIn(TOKEN, out)
 
     def test_airtable_case_that_changed_is_not_booked(self):
-        fake = FakeAirtable([record(3, "Cali", "Paused")])
         from dian_booker.__main__ import resolve
+        self.with_airtable(FakeAirtable([record(3, "Cali", "Paused")]))
         settings = Settings(airtable_token=TOKEN, airtable_base="appXXXXXXXXXXXXXX")
-        import dian_monitor.airtable as at
-        old = at.requests.Session
-        at.requests.Session = lambda: fake
-        try:
-            source = resolve(settings, "case-3", "cali", events.EventLog(
-                os.path.join(tempfile.mkdtemp(), "e.jsonl"), lambda: FRIDAY, "booker"))
-            with self.assertRaises(CasesError):
-                source.load_profile()  # paused since the dispatch: never typed into DIAN
-        finally:
-            at.requests.Session = old
+        source = resolve(settings, "case-3", "cali", events.EventLog(
+            os.path.join(tempfile.mkdtemp(), "e.jsonl"), lambda: FRIDAY, "booker"))
+        with self.assertRaises(CasesError):
+            source.load_profile()  # paused since the dispatch: never typed into DIAN
 
     def test_record_is_per_case_and_city(self):
         from dian_booker import booker

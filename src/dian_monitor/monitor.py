@@ -104,8 +104,8 @@ class Monitor:
     def __init__(self, settings, notifier, client=None, clock=cadence.now_bogota,
                  sleep=time.sleep, rand=random.uniform, booker=None, health=None, cases=None,
                  feed=None):
-        """Cases come from `cases` (tests), else the Airtable feed, else a cases JSON, else
-        the one default case. Routing fields only: the monitor holds no personal data."""
+        """Cases come from `cases` (tests), else the Airtable feed, else the one default case.
+        Routing fields only: the monitor holds no personal data."""
         self.settings = settings
         self.notifier = notifier
         self.client = client or DianClient()
@@ -127,8 +127,7 @@ class Monitor:
         elif self.feed is not None:
             self._feed_result(*self.feed.start())
         else:
-            listed = cases_mod.from_json_settings(settings)
-            self._set_cases(listed if listed is not None else [cases_mod.default_case(settings)])
+            self._set_cases([cases_mod.default_case(settings)])
 
     def cases_in(self, city):
         return [c for c in self.cases if c.city == city]
