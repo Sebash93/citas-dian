@@ -139,7 +139,7 @@ def report(events, since=None):
     attempts = by_kind.get("booker_end", [])
     out.append(f"\nBooker attempts: {len(attempts)}")
     for e in attempts:
-        out.append(f"  {e['t']}  {e.get('case') or 'default'} {e.get('trigger')}  → {e.get('result')}"
+        out.append(f"  {e['t']}  {e.get('case') or '-'} {e.get('trigger')}  → {e.get('result')}"
                    f"{' at ' + e['stage'] if e.get('result') == 'FAILED' else ''}"
                    f"  ({e.get('seconds', 0):.0f} s){'  ' + e['error'] if e.get('error') else ''}")
     stages = {}

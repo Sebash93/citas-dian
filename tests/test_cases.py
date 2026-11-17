@@ -94,7 +94,7 @@ class CaseTest(unittest.TestCase):
         self.assertNotIn("1017234567", repr(personal_case().routing()))
 
     def test_ids_and_cities_are_validated_without_echoing_values(self):
-        for cid in ("1017234567", "Ana Pérez", "default", ""):
+        for cid in ("1017234567", "Ana Pérez", ""):
             with self.assertRaises(CasesError) as ctx:
                 cases.check_id(cid, "case")
             self.assertNotIn("1017234567", str(ctx.exception))
@@ -105,12 +105,10 @@ class CaseTest(unittest.TestCase):
         with self.assertRaises(CasesError):
             cases.check_status("maybe", "case-1")
 
-    def test_default_case_and_per_case_files(self):
-        self.assertEqual(cases.default_case(Settings(city="Medellín")), Case("default", "medellin"))
-        self.assertEqual(cases.booking_file(Settings(), "default"), "state/booking.json")
+    def test_per_case_files(self):
         self.assertEqual(cases.booking_file(Settings(), "case-1"), "state/booking-case-1.json")
-        self.assertEqual(cases.booked_artifact("default"), "booking-booked")
         self.assertEqual(cases.booked_artifact("case-1"), "booking-booked-case-1")
+        self.assertEqual(Case("case-1", "medellin").who, "Medellín (case-1)")
 
     def test_profile_is_cedula_with_clean_digits(self):
         p = Profile.from_case(personal_case(phone="+57 300 123 4567",
@@ -370,6 +368,29 @@ class MultiCityMonitorTest(unittest.TestCase):
             self.assertNotIn(leak, logged)
 
 
+class NoAirtableTest(unittest.TestCase):
+    def test_without_airtable_nothing_is_watched(self):
+        from dian_monitor.monitor import Monitor
+        from dian_monitor.notify import ConsoleNotifier
+        from test_monitor import FakeClient
+        tmp = tempfile.mkdtemp()
+        settings = Settings(state_file=os.path.join(tmp, "s.json"),
+                            events_file=os.path.join(tmp, "e.jsonl"),
+                            captures_dir=os.path.join(tmp, "c"), heartbeat_hour=23)
+        notifier = ConsoleNotifier()
+        mon = Monitor(settings, notifier, client=FakeClient([colas_with(MED, CALI)]),
+                      clock=Clock(FRIDAY), sleep=lambda s: None)
+        self.assertEqual((mon.cases, mon.cities), ([], []))
+        self.assertIn("Airtable no está configurado", notifier.sent[0].text)
+        mon.poll()
+        self.assertEqual(mon.state["openings"], {})
+        self.assertFalse(any("HAY CITA" in m.text for m in notifier.sent))
+
+    def test_booker_needs_airtable(self):
+        code, _ = BookerCaseTest.run_main(BookerCaseTest(), ["--case", "case-1"], BOOKER_DRY_RUN="")
+        self.assertEqual(code, 2)
+
+
 class MonitorFeedTest(unittest.TestCase):
     def make(self, fake, items, start=FRIDAY):
         tmp = tempfile.mkdtemp()
@@ -473,14 +494,22 @@ class BookerCaseTest(unittest.TestCase):
             self.assertIn("no arrancó", out)  # a Telegram note, not only a log line
             self.assertNotIn("1017234567", out)
 
-    def test_case_without_airtable_is_refused(self):
-        code, _ = self.run_main(["--trigger", "found", "--case", "case-1"], BOOKER_DRY_RUN="")
-        self.assertEqual(code, 2)
+    def test_real_booking_needs_videoatencion_devoluciones_and_vehiculos(self):
+        refused = []
 
-    def test_real_booking_needs_the_vehiculos_tramite(self):
-        from test_booker import ENV
-        code, _ = self.run_main(["--service", "persona natural"], **ENV, BOOKER_DRY_RUN="")
-        self.assertEqual(code, 2)
+        class NeverRuns:
+            def __init__(self, *args, **kw):
+                refused.append(False)
+
+        env = self.with_airtable(FakeAirtable([record(1, "Cali")]))
+        args = ["--case", "case-1", "--city", "cali"]
+        for extra_args, extra_env in (([], {"DIAN_TIPO_ATENCION": "1"}),
+                                      ([], {"DIAN_CATEGORIA": "7"}),
+                                      (["--service", "persona natural"], {})):
+            code, _ = self.run_main(args + extra_args, NeverRuns, **env, **extra_env,
+                                    BOOKER_DRY_RUN="")
+            self.assertEqual(code, 2)
+        self.assertEqual(refused, [])  # never got to the browser
 
     def test_airtable_case_reads_its_person_lazily_and_records_the_booking(self):
         fake = FakeAirtable([record(3, "Cali")])

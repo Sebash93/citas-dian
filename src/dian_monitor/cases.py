@@ -10,8 +10,7 @@ The case id appears in public logs, events and GitHub run names, so it must not 
 data: short, lowercase letters, digits and dashes, and no runs of 5+ digits (a document number).
 Error messages name a case by its id only, never by a personal value.
 
-Without Airtable there is one "default" case for DIAN_CITY, with the person from the
-BOOKER_* environment variables (how the project worked before cases).
+Without Airtable there are no cases: nothing is watched and no booker starts.
 """
 import os
 import re
@@ -23,7 +22,6 @@ from .check import normalize
 # (dian.gov.co, "Devoluciones y compensaciones"); everywhere else documents go by email.
 ALLOWED_CITIES = {"bogota": "Bogotá", "bucaramanga": "Bucaramanga", "cali": "Cali",
                   "medellin": "Medellín"}
-DEFAULT_ID = "default"
 PENDING, PAUSED, BOOKED = "pending", "paused", "booked"
 STATUSES = (PENDING, PAUSED, BOOKED)
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,23}$")
@@ -55,8 +53,8 @@ class Case:
 
     @property
     def who(self):
-        """How messages name the case: the city, plus the id when there are cases."""
-        return self.city_name if self.id == DEFAULT_ID else f"{self.city_name} ({self.id})"
+        """How messages name the case: its city and id."""
+        return f"{self.city_name} ({self.id})"
 
     def routing(self):
         """What may be stored or logged: no personal data."""
@@ -65,8 +63,7 @@ class Case:
 
 
 def check_id(cid, where):
-    if not isinstance(cid, str) or not ID_RE.match(cid) or re.search(r"\d{5}", cid) \
-            or cid == DEFAULT_ID:
+    if not isinstance(cid, str) or not ID_RE.match(cid) or re.search(r"\d{5}", cid):
         raise CasesError(f"{where}: id must be 1-24 lowercase letters, digits or dashes, "
                          "with no personal data (no long numbers)")
     return cid
@@ -86,18 +83,12 @@ def check_status(status, where):
     return status
 
 
-def default_case(settings):
-    return Case(DEFAULT_ID, normalize(settings.city))
-
-
 def booking_file(settings, case_id):
-    """Where a booking for this case is recorded (the default case keeps the old path)."""
-    if case_id == DEFAULT_ID:
-        return settings.booking_file
+    """Where a booking for this case is recorded."""
     root, ext = os.path.splitext(settings.booking_file)
     return f"{root}-{case_id}{ext or '.json'}"
 
 
 def booked_artifact(case_id):
     """GitHub artifact booker.yml uploads after a real booking for this case."""
-    return "booking-booked" if case_id == DEFAULT_ID else f"booking-booked-{case_id}"
+    return f"booking-booked-{case_id}"

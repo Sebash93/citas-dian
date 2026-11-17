@@ -20,7 +20,7 @@ from dian_monitor.remote_booker import DispatchError, GitHubBooker  # noqa: E402
 from test_monitor import FRIDAY, Clock, FakeClient, FakeResponse, colas  # noqa: E402
 
 TOKEN = "github_pat_SECRET"
-DEFAULT = Case("default", "medellin")
+MEDELLIN = Case("case-1", "medellin")
 CALI = Case("cali-1", "cali")
 
 
@@ -69,7 +69,8 @@ def make(items, booker=None, **overrides):
     health = FakeHealth()
     notifier = ConsoleNotifier()
     mon = Monitor(settings_in_tmp(**overrides), notifier, client=FakeClient(items), clock=clock,
-                  sleep=clock.sleep, rand=lambda a, b: (a + b) / 2, booker=booker, health=health)
+                  sleep=clock.sleep, rand=lambda a, b: (a + b) / 2, booker=booker, health=health,
+                  cases=[MEDELLIN])
     return mon, health, notifier, clock
 
 
@@ -133,22 +134,27 @@ class GitHubBookerTest(unittest.TestCase):
     def test_dispatches_with_trigger_and_counts_as_running_meanwhile(self):
         gh = FakeGitHub()
         b, t = self.booker(gh)
-        self.assertTrue(b.start(DEFAULT, "found"))
+        self.assertTrue(b.start(MEDELLIN, "found"))
         method, url, kwargs = gh.calls[-1]
         self.assertEqual(method, "POST")
         self.assertTrue(url.endswith("/repos/me/repo/actions/workflows/booker.yml/dispatches"))
         self.assertEqual(kwargs["json"], {"ref": "main", "inputs": {
-            "trigger": "found", "case": "default", "city": "medellin"}})
-        self.assertFalse(b.start(DEFAULT, "found"))  # not visible in the API yet, still "running"
+            "trigger": "found", "case": "case-1", "city": "medellin"}})
+        self.assertFalse(b.start(MEDELLIN, "found"))  # not visible in the API yet, still "running"
         self.assertEqual(b.active(), 1)
         t[0] = 120
-        self.assertTrue(b.start(DEFAULT, "found"))
+        self.assertTrue(b.start(MEDELLIN, "found"))
 
     def test_active_run_blocks_a_second_dispatch(self):
-        gh = FakeGitHub(runs=["completed", "in_progress"])
+        gh = FakeGitHub(runs=["completed", ("in_progress", "Booker case-1 found")])
         b, _ = self.booker(gh)
-        self.assertFalse(b.start(DEFAULT, "watch"))  # an old run, titled just "Booker"
+        self.assertFalse(b.start(MEDELLIN, "watch"))
         self.assertNotIn("POST", [c[0] for c in gh.calls])
+
+    def test_untitled_old_runs_belong_to_no_case(self):
+        gh = FakeGitHub(runs=["in_progress"])  # titled just "Booker", from before cases
+        b, _ = self.booker(gh)
+        self.assertTrue(b.start(MEDELLIN, "watch"))
 
     def test_runs_are_matched_to_their_case_by_title(self):
         gh = FakeGitHub(runs=[("in_progress", "Booker cali-1 found"), ("completed", "Booker med-1 watch")])
@@ -167,7 +173,7 @@ class GitHubBookerTest(unittest.TestCase):
         gh = FakeGitHub(artifacts={"booking-booked-cali-1": 1})
         b, _ = self.booker(gh)
         self.assertTrue(b.booked(CALI))
-        self.assertFalse(b.booked(DEFAULT))  # each case has its own artifact
+        self.assertFalse(b.booked(MEDELLIN))  # each case has its own artifact
         gh.artifacts = {}  # artifact deleted on GitHub: booking is re-enabled at once
         self.assertFalse(b.booked(CALI))
 
@@ -182,14 +188,14 @@ class GitHubBookerTest(unittest.TestCase):
     def test_errors_never_carry_the_token(self):
         b, _ = self.booker(FakeGitHub(dispatch_status=401))
         with self.assertRaises(DispatchError) as ctx:
-            b.start(DEFAULT, "found")
+            b.start(MEDELLIN, "found")
         self.assertIn("401 Bad credentials", str(ctx.exception))
         self.assertNotIn(TOKEN, str(ctx.exception))
 
     def test_missing_token(self):
         b = GitHubBooker("me/repo", "", session=FakeGitHub())
         with self.assertRaises(DispatchError):
-            b.start(DEFAULT, "found")
+            b.start(MEDELLIN, "found")
 
 
 class BookerChoiceTest(unittest.TestCase):

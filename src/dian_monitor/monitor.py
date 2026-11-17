@@ -104,8 +104,8 @@ class Monitor:
     def __init__(self, settings, notifier, client=None, clock=cadence.now_bogota,
                  sleep=time.sleep, rand=random.uniform, booker=None, health=None, cases=None,
                  feed=None):
-        """Cases come from `cases` (tests), else the Airtable feed, else the one default case.
-        Routing fields only: the monitor holds no personal data."""
+        """Cases come from `cases` (tests) or the Airtable feed; without Airtable there are none
+        and nothing is watched. Routing fields only: the monitor holds no personal data."""
         self.settings = settings
         self.notifier = notifier
         self.client = client or DianClient()
@@ -127,7 +127,10 @@ class Monitor:
         elif self.feed is not None:
             self._feed_result(*self.feed.start())
         else:
-            self._set_cases([cases_mod.default_case(settings)])
+            log("Airtable is not configured (AIRTABLE_TOKEN, AIRTABLE_BASE_ID): no cases, "
+                "nothing is watched.")
+            self.notifier.send(notify.no_cases_source())
+            self._set_cases([])
 
     def cases_in(self, city):
         return [c for c in self.cases if c.city == city]
@@ -362,8 +365,7 @@ class Monitor:
         waiting = self._waiting_cases(city)
         if alert and waiting:
             self.notifier.send(notify.opening(self.settings, name, matches, now, first=first,
-                                              cases=[c.id for c in waiting
-                                                     if c.id != cases_mod.DEFAULT_ID]))
+                                              cases=[c.id for c in waiting]))
             opening["alerts"] += 1
             opening["last_alert_at"] = _iso(now)
         elif not waiting and not opening["booked_notice"]:

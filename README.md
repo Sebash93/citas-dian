@@ -128,8 +128,8 @@ devolución tramite is never booked, and its openings are only logged.
 
 For local runs, copy `.env.example` to `.env` (it points at the test base "Citas DIAN –
 Pruebas", fake people only) and check the connection with
-`PYTHONPATH=src python3 -m dian_monitor --cases`. Without Airtable, everything works as before: one
-"default" case for `DIAN_CITY` (Medellín) with the `BOOKER_*` secrets.
+`PYTHONPATH=src python3 -m dian_monitor --cases`. Without Airtable there are no cases: the
+monitor watches nothing (it tells you so on Telegram) and no booker starts.
 
 When a city opens, you get one alert for it listing the cases still waiting. A city whose cases
 all have a booking recorded is not alerted (you get one note instead). At most
@@ -173,8 +173,8 @@ a new one if the last one ended. Each change ("started", "running (GitHub run �
 under each opening, flagging any opening that had no booker.
 
 One booker runs per case at a time. After a real booking in the case's city (by the bot, or
-by you in the live browser) the workflow uploads an empty `booking-booked-<case>` artifact
-(`booking-booked` for the default case). While it exists, the monitor starts no more bookers
+by you in the live browser) the workflow uploads an empty `booking-booked-<case>` artifact and
+the case becomes **Booked** in Airtable. While the artifact exists, the monitor starts no more bookers
 for that case. Delete the artifact on GitHub to book that case again; the monitor checks it on
 every poll. Bookings for another city are never recorded.
 
@@ -187,19 +187,18 @@ Setup:
   variable `DIAN_BOOKER=1`. Repo variable `BOOKER_DRY_RUN=1` stops before Agendar in both.
 - Cases (see Cases): Render env `AIRTABLE_TOKEN`; GitHub secret `AIRTABLE_TOKEN` and repo
   variables `AIRTABLE_BASE_ID`, `AIRTABLE_TABLE`. The token is a Personal Access Token with only
-  `data.records:read` and `data.records:write` on the base. For the single default case, secrets `BOOKER_DOC_NUMBER`,
-  `BOOKER_FULL_NAME`, `BOOKER_EMAIL`, `BOOKER_PHONE`, and optionally `BOOKER_DOC_TYPE`
-  (default "Cédula de ciudadanía").
-- To test: **Actions → Booker test run** walks any open category as a dry run and sends you
-  the link. Give it a `case` (e.g. `case-3`) to use that Airtable case's person and city.
-- The GitHub fallback monitor runs one booker at a time, and only the default case's booking
-  reaches Render (other cases' bookings stay in its own state).
+  `data.records:read` and `data.records:write` on the base. The old `BOOKER_*` secrets are no
+  longer used and can be deleted.
+- To test: **Actions → Booker test run** walks any open category as a dry run with an Airtable
+  case (e.g. `case-3`: its person and city) and sends you the link.
+- The GitHub fallback monitor runs one booker at a time; its bookings reach Render through
+  Airtable (Status = Booked) at the next refresh.
 
-Locally: `pip install -r requirements-booker.txt` and run
-`PYTHONPATH=src python3 -m dian_booker --local --dry-run --trigger found`. It uses your own
-Chrome window and doesn't send a link.
+Locally: `pip install -r requirements-booker.txt`, load `.env` (test base) and run
+`PYTHONPATH=src python3 -m dian_booker --local --dry-run --trigger found --case case-1`. It uses
+your own Chrome window and doesn't send a link.
 
-Your personal data comes only from secrets/env vars. It is never logged, and screenshots go
+The people's data comes only from Airtable. It is never logged, and screenshots go
 only to Telegram.
 
 ## Event log and reports
@@ -226,7 +225,7 @@ your name, document, email and phone before they're written.
 
 `AIRTABLE_TOKEN` / `AIRTABLE_BASE_ID` / `AIRTABLE_TABLE`, `DIAN_CASES_REFRESH_HOURS`,
 `DIAN_CASES_CACHE_FILE`, `DIAN_SERVICE` (default `vehiculos`), `DIAN_MAX_PARALLEL_BOOKERS`,
-`DIAN_CITY` (without cases; default `medellin`), `DIAN_TIPO_PERSONA`, `DIAN_TIPO_ATENCION`, `DIAN_CATEGORIA`,
+`DIAN_TIPO_PERSONA`, `DIAN_TIPO_ATENCION`, `DIAN_CATEGORIA`,
 `DIAN_RUN_BUDGET_SECONDS`, `DIAN_REALERT_SECONDS`, `DIAN_MAX_REALERTS`,
 `DIAN_FAILURES_BEFORE_ALERT`, `DIAN_HEARTBEAT_HOUR`, `DIAN_BOOKER`, `DIAN_BOOKER_REPO`,
 `DIAN_HEALTHCHECK_URL`. See `src/dian_monitor/config.py`.

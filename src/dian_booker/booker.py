@@ -11,7 +11,6 @@ import urllib.request
 from datetime import datetime
 
 from dian_monitor import cadence
-from dian_monitor.cases import DEFAULT_ID, Case
 from dian_monitor.events import EventLog
 from dian_monitor.notify import Message
 
@@ -121,13 +120,13 @@ def msg_unresponsive(stage, minutes_held, who):
 class Booker:
     def __init__(self, settings, profile, notifier, trigger="manual", dry_run=False, local=False,
                  wait_minutes=12, captcha_minutes=10, hold_minutes=10, shots_dir="booker",
-                 service_hint="", case=None, load_profile=None, on_booked=None):
+                 service_hint="", *, case, load_profile=None, on_booked=None):
         """`settings.city` and `settings.booking_file` must already be the case's.
         `profile` may be None with `load_profile` (called once, when the person is needed:
         at once for `found`, otherwise when the city appears). `on_booked(chosen)` records a
         real booking elsewhere too (Airtable)."""
         self.settings = settings
-        self.case = case or Case(DEFAULT_ID, settings.city)
+        self.case = case
         self.who = self.case.who
         self.profile = profile
         self.load_profile = load_profile

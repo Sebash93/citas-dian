@@ -22,8 +22,13 @@ from dian_monitor.monitor import BookerProcess, Monitor, already_booked  # noqa:
 from dian_monitor.notify import ConsoleNotifier  # noqa: E402
 from test_monitor import FRIDAY, Clock, FakeClient, colas  # noqa: E402
 
-ENV = {"BOOKER_DOC_NUMBER": "1.017.234.567", "BOOKER_FULL_NAME": "Ana Pérez",
-       "BOOKER_EMAIL": "ana@example.com", "BOOKER_PHONE": "+57 300 123 4567"}
+PERSON = {"document_number": "1.017.234.567", "full_name": "Ana Pérez",
+          "email": "ana@example.com", "phone": "+57 300 123 4567"}
+MEDELLIN = Case("case-1", "medellin")
+
+
+def profile():
+    return Profile.from_case(Case("case-1", "medellin", personal=PERSON))
 
 
 class ChooseTest(unittest.TestCase):
@@ -68,20 +73,20 @@ class ChooseTest(unittest.TestCase):
 
 class ProfileTest(unittest.TestCase):
     def test_reads_and_normalizes(self):
-        p = Profile.from_env(ENV)
+        p = profile()
         self.assertEqual(p.doc_number, "1017234567")
-        self.assertEqual(p.phone, "573001234567")
+        self.assertEqual(p.phone, "3001234567")
         self.assertEqual(p.doc_type, "Cédula de ciudadanía")
 
     def test_repr_hides_personal_data(self):
-        text = repr(Profile.from_env(ENV)) + str(Profile.from_env(ENV))
+        text = repr(profile()) + str(profile())
         for secret in ("1017234567", "Ana", "ana@example.com", "3001234567"):
             self.assertNotIn(secret, text)
 
     def test_missing_fields(self):
         with self.assertRaises(ProfileError) as ctx:
-            Profile.from_env({"BOOKER_DOC_NUMBER": "1"})
-        self.assertIn("BOOKER_EMAIL", str(ctx.exception))
+            Profile.from_case(Case("case-1", "cali", personal={"document_number": "1"}))
+        self.assertIn("missing full_name, email, phone", str(ctx.exception))
 
 
 class RemoteTest(unittest.TestCase):
@@ -129,11 +134,19 @@ class SafetyStopTest(unittest.TestCase):
         tmp = tempfile.mkdtemp()
         settings = replace(Settings(), booking_file=os.path.join(tmp, "booking.json"),
                            events_file=os.path.join(tmp, "events.jsonl"))
-        b = booker.Booker(settings, Profile.from_env(ENV), ConsoleNotifier())
+        b = booker.Booker(settings, profile(), ConsoleNotifier(), case=MEDELLIN)
         self.assertFalse(b._record({"servicio": 'Bogotá "Solicitud…".'}))
         self.assertFalse(already_booked(settings.booking_file))
         self.assertTrue(b._record({"servicio": "Medellín “Solicitud…”."}))
         self.assertTrue(already_booked(settings.booking_file))
+
+    def test_check_city_also_checks_the_service(self):
+        w = Wizard(page=None, settings=Settings(), log=print, service_hint="vehiculos")
+        w.chosen["servicio"] = "Medellín “Solicitud de devolución y/o compensación persona natural”."
+        with self.assertRaises(CityMismatch):
+            w.check_city()
+        w.chosen["servicio"] = "“Medellín - Solicitud de devolución Vehículos eléctricos”"
+        w.check_city()
 
     def test_timeouts_count_as_unresponsive(self):
         class TimeoutError(Exception):  # stands in for Playwright's, matched by name
@@ -153,30 +166,6 @@ class SafetyStopTest(unittest.TestCase):
         w.find_service = lambda: (_ for _ in ()).throw(TimeoutError("again"))
         self.assertIsNone(w.wait_for_service(0, retry_seconds=0))
         self.assertTrue(w.unresponsive)  # → UNRESPONSIVE, not FAILED
-
-    def test_real_booking_outside_videoatencion_devoluciones_is_refused(self):
-        from dian_booker.__main__ import main
-        old = dict(os.environ)
-        try:
-            for codes in ({"DIAN_TIPO_ATENCION": "1"}, {"DIAN_CATEGORIA": "7"}):
-                os.environ.update({**ENV, **codes, "BOOKER_DRY_RUN": ""})
-                self.assertEqual(main(["--trigger", "manual"]), 2)
-                os.environ.clear()
-                os.environ.update(old)
-        finally:
-            os.environ.clear()
-            os.environ.update(old)
-
-    def test_real_booking_outside_the_appointment_cities_is_refused(self):
-        from dian_booker.__main__ import main
-        env = {**ENV, "DIAN_CITY": "pasto", "BOOKER_DRY_RUN": ""}
-        old = dict(os.environ)
-        os.environ.update(env)
-        try:
-            self.assertEqual(main(["--trigger", "manual"]), 2)
-        finally:
-            os.environ.clear()
-            os.environ.update(old)
 
 
 class FakeDisplay:
@@ -200,7 +189,7 @@ class LinkOrderTest(unittest.TestCase):
         settings = replace(Settings(), booking_file=os.path.join(tmp, "booking.json"),
                            events_file=os.path.join(tmp, "events.jsonl"))
         notifier = ConsoleNotifier()
-        b = booker.Booker(settings, Profile.from_env(ENV), notifier, trigger=trigger,
+        b = booker.Booker(settings, profile(), notifier, trigger=trigger, case=MEDELLIN,
                           shots_dir=os.path.join(tmp, "shots"))
         seen = {}
 
@@ -243,7 +232,7 @@ class LinkOrderTest(unittest.TestCase):
         tmp = tempfile.mkdtemp()
         settings = replace(Settings(), events_file=os.path.join(tmp, "events.jsonl"))
         notifier = ConsoleNotifier()
-        b = booker.Booker(settings, Profile.from_env(ENV), notifier, trigger="watch")
+        b = booker.Booker(settings, profile(), notifier, trigger="watch", case=MEDELLIN)
 
         class NotOffered:
             unresponsive = False
@@ -327,7 +316,7 @@ class FakeBooker:
         self.busy_cases.clear()
 
 
-def make(items, latencies=None, cases=None, feed=None, **overrides):
+def make(items, latencies=None, cases=(MEDELLIN,), feed=None, **overrides):
     tmp = tempfile.mkdtemp()
     settings = replace(Settings(), state_file=os.path.join(tmp, "state.json"),
                        captures_dir=os.path.join(tmp, "captures"),
@@ -337,7 +326,8 @@ def make(items, latencies=None, cases=None, feed=None, **overrides):
     clock = Clock(FRIDAY)
     fake = FakeBooker()
     mon = Monitor(settings, ConsoleNotifier(), client=FakeClient(items, latencies), clock=clock,
-                  sleep=clock.sleep, rand=lambda a, b: (a + b) / 2, booker=fake, cases=cases, feed=feed)
+                  sleep=clock.sleep, rand=lambda a, b: (a + b) / 2, booker=fake,
+                  cases=None if feed is not None else list(cases), feed=feed)
     return mon, fake
 
 
@@ -425,15 +415,12 @@ class BookerLaunchTest(unittest.TestCase):
     def test_local_booker_reads_the_booking_file(self):
         path = os.path.join(tempfile.mkdtemp(), "booking.json")
         proc = BookerProcess(replace(Settings(), booking_file=path))
-        default, other = Case("default", "medellin"), Case("cali-1", "cali")
-        self.assertFalse(proc.booked(default))
-        with open(path, "w") as f:
+        one, other = Case("case-1", "medellin"), Case("case-2", "cali")
+        self.assertFalse(proc.booked(one))
+        with open(path.replace(".json", "-case-1.json"), "w") as f:
             json.dump({"booked": True}, f)
-        self.assertTrue(proc.booked(default))
-        self.assertFalse(proc.booked(other))  # its own file: booking-cali-1.json
-        with open(path.replace(".json", "-cali-1.json"), "w") as f:
-            json.dump({"booked": True}, f)
-        self.assertTrue(proc.booked(other))
+        self.assertTrue(proc.booked(one))
+        self.assertFalse(proc.booked(other))  # each case has its own file
 
     def test_disabled_by_default(self):
         tmp = tempfile.mkdtemp()

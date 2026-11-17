@@ -187,6 +187,11 @@ def cases_problem(error, have_cases=False):
     return Message(f"⚠️ Bot DIAN: no pude leer los casos ({error}). {tail}", urgent=True)
 
 
+def no_cases_source():
+    return Message("⚠️ Bot DIAN: Airtable no está configurado (AIRTABLE_TOKEN, AIRTABLE_BASE_ID), "
+                   "así que no tengo casos y no vigilo nada.", urgent=True)
+
+
 def cases_recovered():
     return Message("✅ Bot DIAN: volví a leer los casos.")
 

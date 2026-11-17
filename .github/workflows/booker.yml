@@ -5,11 +5,11 @@ run-name: Booker ${{ inputs.case }} ${{ inputs.trigger }}
 # Started by the monitor on Render (GitHub API, workflow_dispatch), one run per case, when the
 # case's city opens or, to watch it for a few minutes, when another tramite opens. Drives the
 # wizard to the reCAPTCHA and sends the live-browser link; a human solves the captcha.
-# After a real booking it uploads an empty `booking-booked-<case>` artifact (`booking-booked`
-# for the default case), which stops the monitor from starting more bookers for that case.
+# After a real booking it uploads an empty `booking-booked-<case>` artifact, which stops the
+# monitor from starting more bookers for that case.
 # The cases come from Airtable: the monitor passes the case's id and city, and the booker reads
-# the person only when it needs it and marks the case Booked after a real booking. The default
-# case uses the BOOKER_* secrets. To test by hand use booker-test.yml instead.
+# the person only when it needs it and marks the case Booked after a real booking. To test by
+# hand use booker-test.yml instead.
 on:
   workflow_dispatch:
     inputs:
@@ -19,8 +19,8 @@ on:
         options: [found, watch]
         default: found
       case:
-        description: "Case id, e.g. case-3 (default: the BOOKER_* person, Medellín)"
-        default: default
+        description: "Airtable case id, e.g. case-3"
+        required: true
       city:
         description: "The case's city (the monitor passes it; empty = read it from Airtable)"
         default: ""
@@ -70,15 +70,10 @@ jobs:
           AIRTABLE_TOKEN: ${{ secrets.AIRTABLE_TOKEN }}
           AIRTABLE_BASE_ID: ${{ vars.AIRTABLE_BASE_ID }}
           AIRTABLE_TABLE: ${{ vars.AIRTABLE_TABLE }}
-          BOOKER_DOC_TYPE: ${{ secrets.BOOKER_DOC_TYPE }}
-          BOOKER_DOC_NUMBER: ${{ secrets.BOOKER_DOC_NUMBER }}
-          BOOKER_FULL_NAME: ${{ secrets.BOOKER_FULL_NAME }}
-          BOOKER_EMAIL: ${{ secrets.BOOKER_EMAIL }}
-          BOOKER_PHONE: ${{ secrets.BOOKER_PHONE }}
         run: python -m dian_booker --trigger "${{ inputs.trigger }}"
 
       # The marker carries no personal data: booking*.json (date, sede) is replaced by a
-      # timestamp. The booker writes booked/booking.json (default case) or booking-<case>.json.
+      # timestamp. The booker writes booked/booking-<case>.json.
       - name: Mark booked
         if: always()
         run: |
@@ -90,7 +85,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ inputs.case == 'default' && 'booking-booked' || format('booking-booked-{0}', inputs.case) }}
+          name: booking-booked-${{ inputs.case }}
           path: marker/booked.txt
           if-no-files-found: ignore
           retention-days: 90

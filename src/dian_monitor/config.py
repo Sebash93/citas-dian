@@ -22,14 +22,14 @@ class Settings:
     tipo_persona: str = "1"
     tipo_atencion: str = "2"
     categoria: str = "13"
-    # Accent/case-insensitive city matched against the "<City> - ..." prefix of each tramite.
-    # Used only without Airtable (one "default" case); with cases, each case has its city.
+    # The booker's city: set from its case (not an env var). Accent/case-insensitive, matched
+    # against the "<City> - ..." prefix of each tramite.
     city: str = "medellin"
     # The one tramite every case is for: only tramites whose name contains it are watched and
     # booked, with no fallback to another tramite of the city.
     service: str = "vehiculos"
-    # The cases (people to book and their cities) come from Airtable when a token and base are
-    # set (see airtable.py); otherwise there is one "default" case for `city`.
+    # The cases (people to book and their cities) come from Airtable (see airtable.py). Without
+    # a token and base there are no cases: nothing is watched.
     airtable_token: str = field(default="", repr=False)  # secret: never logged
     airtable_base: str = ""
     airtable_table: str = "Cases"   # name or tbl… id
@@ -82,7 +82,6 @@ class Settings:
             tipo_persona=_env("DIAN_TIPO_PERSONA", cls.tipo_persona),
             tipo_atencion=_env("DIAN_TIPO_ATENCION", cls.tipo_atencion),
             categoria=_env("DIAN_CATEGORIA", cls.categoria),
-            city=_env("DIAN_CITY", cls.city),
             service=_env("DIAN_SERVICE", cls.service),
             airtable_token=_env("AIRTABLE_TOKEN", ""),
             airtable_base=_env("AIRTABLE_BASE_ID", cls.airtable_base),
