@@ -1,7 +1,8 @@
-"""The applicant's data, read only from the environment (GitHub secrets or a local shell)."""
-import os
+"""The applicant's data, from their Airtable case (cases.Case.personal)."""
 import re
 from dataclasses import dataclass
+
+FIELDS = ("full_name", "document_number", "email", "phone")
 
 
 class ProfileError(Exception):
@@ -14,41 +15,26 @@ class Profile:
     full_name: str
     email: str
     phone: str
-    doc_type: str = "Cédula de ciudadanía"  # label as shown in the DIAN TipoDocumento list
-
-    @classmethod
-    def from_env(cls, env=None):
-        env = os.environ if env is None else env
-        get = lambda name: env.get(name, "").strip()  # noqa: E731
-        missing = [n for n in ("BOOKER_DOC_NUMBER", "BOOKER_FULL_NAME", "BOOKER_EMAIL",
-                               "BOOKER_PHONE") if not get(n)]
-        if missing:
-            raise ProfileError(f"missing {', '.join(missing)}")
-        doc = re.sub(r"[\s.]", "", get("BOOKER_DOC_NUMBER"))
-        phone = re.sub(r"\D", "", get("BOOKER_PHONE"))
-        if not doc.isalnum():
-            raise ProfileError("BOOKER_DOC_NUMBER must be letters/digits only")
-        if "@" not in get("BOOKER_EMAIL"):
-            raise ProfileError("BOOKER_EMAIL is not an email")
-        return cls(doc_number=doc, full_name=get("BOOKER_FULL_NAME"), email=get("BOOKER_EMAIL"),
-                   phone=phone, doc_type=get("BOOKER_DOC_TYPE") or cls.doc_type)
+    doc_type: str = "Cédula de ciudadanía"  # always; label as shown in the DIAN TipoDocumento list
 
     @classmethod
     def from_case(cls, case):
-        """The person of one case (cases.find); errors name the case, never a value."""
-        p = case.personal
-        env = {"BOOKER_DOC_NUMBER": p.get("doc_number", ""), "BOOKER_FULL_NAME": p.get("full_name", ""),
-               "BOOKER_EMAIL": p.get("email", ""), "BOOKER_PHONE": p.get("phone", ""),
-               "BOOKER_DOC_TYPE": p.get("doc_type", "")}
-        try:
-            return cls.from_env(env)
-        except ProfileError as e:
-            names = {"BOOKER_DOC_NUMBER": "doc_number", "BOOKER_FULL_NAME": "full_name",
-                     "BOOKER_EMAIL": "email", "BOOKER_PHONE": "phone"}
-            text = str(e)
-            for old, new in names.items():
-                text = text.replace(old, new)
-            raise ProfileError(f"case {case.id!r}: {text}") from None
+        """The person of one case. Errors name the case and the field, never a value."""
+        p = {k: str(case.personal.get(k) or "").strip() for k in FIELDS}
+        missing = [k for k in FIELDS if not p[k]]
+        if missing:
+            raise ProfileError(f"case {case.id!r}: missing {', '.join(missing)}")
+        doc = re.sub(r"[\s.]", "", p["document_number"])
+        phone = re.sub(r"\D", "", p["phone"])
+        if len(phone) == 12 and phone.startswith("57"):  # +57 typed in the form
+            phone = phone[2:]
+        if not doc.isdigit():
+            raise ProfileError(f"case {case.id!r}: document_number must be digits only")
+        if "@" not in p["email"]:
+            raise ProfileError(f"case {case.id!r}: email is not an email")
+        if len(phone) != 10:
+            raise ProfileError(f"case {case.id!r}: phone must have 10 digits")
+        return cls(doc_number=doc, full_name=p["full_name"], email=p["email"], phone=phone)
 
     def scrub(self, text):
         """Mask this person's data (and any live-browser link) in free text such as errors."""

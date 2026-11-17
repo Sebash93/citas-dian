@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 
 from . import cadence, notify
 from . import cases as cases_mod
+from .airtable import Airtable, CasesFeed
 from .events import EventLog, percentile
 from .health import Health
 from . import state as state_mod
@@ -65,7 +66,8 @@ class BookerProcess:
         if self.running(case):
             return False
         self.procs[case.id] = subprocess.Popen([sys.executable, "-m", "dian_booker",
-                                                "--trigger", trigger, "--case", case.id])
+                                                "--trigger", trigger, "--case", case.id,
+                                                "--city", case.city])
         return True
 
     def wait(self):
@@ -76,6 +78,16 @@ class BookerProcess:
 
     def describe(self, case):
         return f"local process {self.procs[case.id].pid}" if self.running(case) else "not running"
+
+
+def build_feed(settings, events, clock):
+    """The Airtable cases feed, or None when Airtable is not configured."""
+    airtable = Airtable.from_settings(
+        settings, on_call=lambda op, ok: events.emit("airtable_call", op=op, ok=ok))
+    if airtable is None:
+        return None
+    return CasesFeed(airtable, settings.cases_refresh_hours, settings.cases_cache_file, clock,
+                     log, refresh_on_start=settings.cases_refresh_on_start)
 
 
 def build_booker(settings):
@@ -90,12 +102,11 @@ def build_booker(settings):
 
 class Monitor:
     def __init__(self, settings, notifier, client=None, clock=cadence.now_bogota,
-                 sleep=time.sleep, rand=random.uniform, booker=None, health=None, cases=None):
+                 sleep=time.sleep, rand=random.uniform, booker=None, health=None, cases=None,
+                 feed=None):
+        """Cases come from `cases` (tests) or the Airtable feed; without Airtable there are none
+        and nothing is watched. Routing fields only: the monitor holds no personal data."""
         self.settings = settings
-        # Routing fields only: the monitor never holds anyone's personal data.
-        self.cases = [c for c in (cases if cases is not None else cases_mod.load(settings))
-                      if c.enabled]
-        self.cities = sorted({c.city for c in self.cases})
         self.notifier = notifier
         self.client = client or DianClient()
         self.clock = clock
@@ -107,9 +118,54 @@ class Monitor:
         self.events = EventLog(settings.events_file, clock, "monitor")
         self.stats = {"checks": 0, "errors": 0, "latencies": [], "statuses": {}}
         self._booked = {}  # case id -> booked(), cached for one check
+        self.cases, self.cities = [], []
+        self._skipped_notice = None
+        self.feed = feed if cases is not None or feed is not None else build_feed(
+            settings, self.events, clock)
+        if cases is not None:
+            self._set_cases(cases)
+        elif self.feed is not None:
+            self._feed_result(*self.feed.start())
+        else:
+            log("Airtable is not configured (AIRTABLE_TOKEN, AIRTABLE_BASE_ID): no cases, "
+                "nothing is watched.")
+            self.notifier.send(notify.no_cases_source())
+            self._set_cases([])
 
     def cases_in(self, city):
         return [c for c in self.cases if c.city == city]
+
+    def _set_cases(self, cases):
+        """Watch these cases (pending only). Openings of cities no longer watched end here, and
+        decisions of cases that are gone are forgotten."""
+        self.cases = [c for c in cases if c.enabled]
+        self.cities = sorted({c.city for c in self.cases})
+        now = self.clock()
+        for city in [c for c in self.state["openings"] if c not in self.cities]:
+            self._on_city_closed(now, city, reason="unwatched")
+        ids = {c.id for c in self.cases}
+        decisions = self.state["booker_decisions"]
+        for cid in [c for c in decisions if c not in ids]:
+            decisions.pop(cid)
+        watched = ", ".join(f"{c.city_name} [{c.id}]" for c in self.cases) or "no pending case"
+        log(f"Cases: {watched}")
+
+    def _feed_result(self, cases, problem):
+        feed = self.feed
+        if problem:
+            if feed.failures == 1:  # once per streak; the cached cases keep being watched
+                self.notifier.send(notify.cases_problem(problem, bool(cases)))
+        elif feed.fetched_at is not None and self.state.get("cases_problem"):
+            self.notifier.send(notify.cases_recovered())
+        self.state["cases_problem"] = bool(problem)
+        if feed.skipped and feed.skipped != self._skipped_notice:
+            self.notifier.send(notify.cases_skipped(feed.skipped))
+        self._skipped_notice = list(feed.skipped)
+        self.events.emit("cases_refresh", ok=not problem, cases=len(cases),
+                         pending=sum(c.enabled for c in cases), skipped=len(feed.skipped),
+                         cities=sorted({c.city for c in cases if c.enabled}),
+                         error=(problem or "")[:300] or None)
+        self._set_cases(cases)
 
     # --- bookkeeping -------------------------------------------------------
 
@@ -265,14 +321,15 @@ class Monitor:
                 if case.city not in result.by_city:
                     self._maybe_book(case, "watch")
 
-    def _on_city_closed(self, now, city):
+    def _on_city_closed(self, now, city, reason=None):
         st = self.state
         opening = st["openings"].pop(city, None)
         if opening is None:
             return
-        log(f"{cases_mod.city_name(city)} opening closed (open since {opening['since']}).")
+        log(f"{cases_mod.city_name(city)} opening closed (open since {opening['since']})"
+            f"{' because no case watches it anymore' if reason else ''}.")
         opened = _parse(opening["since"])
-        self.events.emit("closed", city=city, opened=opening["since"],
+        self.events.emit("closed", city=city, opened=opening["since"], reason=reason,
                          minutes=round((now - opened).total_seconds() / 60, 1))
         for entry in reversed(st["history"]):
             if entry.get("city") == city and entry["closed"] is None:
@@ -308,8 +365,7 @@ class Monitor:
         waiting = self._waiting_cases(city)
         if alert and waiting:
             self.notifier.send(notify.opening(self.settings, name, matches, now, first=first,
-                                              cases=[c.id for c in waiting
-                                                     if c.id != cases_mod.DEFAULT_ID]))
+                                              cases=[c.id for c in waiting]))
             opening["alerts"] += 1
             opening["last_alert_at"] = _iso(now)
         elif not waiting and not opening["booked_notice"]:
@@ -330,9 +386,11 @@ class Monitor:
         self.stats["checks"] += 1
         s = self.settings
         self._booked = {}
+        if self.feed is not None and self.feed.due(now):
+            self._feed_result(*self.feed.refresh())
         try:
             result = evaluate(self.client.find_colas(s.tipo_persona, s.categoria, s.tipo_atencion),
-                              self.cities)
+                              self.cities, s.service)
         except Blocked as e:
             self._on_blocked(now, e)
             self._save()

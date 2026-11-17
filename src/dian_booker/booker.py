@@ -11,7 +11,6 @@ import urllib.request
 from datetime import datetime
 
 from dian_monitor import cadence
-from dian_monitor.cases import DEFAULT_ID, Case
 from dian_monitor.events import EventLog
 from dian_monitor.notify import Message
 
@@ -121,12 +120,17 @@ def msg_unresponsive(stage, minutes_held, who):
 class Booker:
     def __init__(self, settings, profile, notifier, trigger="manual", dry_run=False, local=False,
                  wait_minutes=12, captcha_minutes=10, hold_minutes=10, shots_dir="booker",
-                 service_hint="", case=None):
-        """`settings.city` and `settings.booking_file` must already be the case's."""
+                 service_hint="", *, case, load_profile=None, on_booked=None):
+        """`settings.city` and `settings.booking_file` must already be the case's.
+        `profile` may be None with `load_profile` (called once, when the person is needed:
+        at once for `found`, otherwise when the city appears). `on_booked(chosen)` records a
+        real booking elsewhere too (Airtable)."""
         self.settings = settings
-        self.case = case or Case(DEFAULT_ID, settings.city)
+        self.case = case
         self.who = self.case.who
         self.profile = profile
+        self.load_profile = load_profile
+        self.on_booked = on_booked
         self.notifier = notifier
         self.trigger = trigger
         self.dry_run = dry_run
@@ -205,13 +209,22 @@ class Booker:
         if self.error is None:
             return None
         text = f"{type(self.error).__name__}: {self.error}"
+        if self.profile is None:  # no personal data loaded yet: only the link can leak
+            return re.sub(r"https://[a-z0-9-]+\.trycloudflare\.com\S*", "<link>", text)[:400]
         return self.profile.scrub(text)[:400]
+
+    def _ensure_profile(self):
+        if self.profile is None:
+            stage, self.stage = self.stage, "case_data"
+            self.profile = self.load_profile()
+            self.stage = stage
 
     def _attempt(self, page, display, started):
         wizard = Wizard(page, self.settings, log, self.service_hint)
         try:
             if self.trigger == "found":  # confirmed opening: get the human moving right away
                 self._share_link_soon(display)
+                self._ensure_profile()  # and find a bad record before the slot matters
             self.stage = "PasoUno"
             deadline = started + self.wait_minutes * 60
             service = wizard.wait_for_service(deadline)
@@ -227,6 +240,7 @@ class Booker:
                 return NOT_OPEN
             self._mark("service_chosen", started)
             self._share_link_soon(display)
+            self._ensure_profile()
             self.stage = "PasoDos"
             wizard.pick_slot()
             self._mark("slot_chosen", started)
@@ -345,4 +359,15 @@ class Booker:
             json.dump({"booked": True, "at": cadence.now_bogota().isoformat(timespec="seconds"),
                        "case": self.case.id, "chosen": chosen, "dry_run": False}, f,
                       ensure_ascii=False, indent=2)
+        if self.on_booked is not None:
+            try:
+                self.on_booked(chosen)
+                self.events.emit("booker_recorded", case=self.case.id)
+            except Exception as e:  # noqa: BLE001 - the booking itself is done
+                log(f"Could not record the booking in Airtable: {type(e).__name__}")
+                self.events.emit("booker_record_failed", case=self.case.id,
+                                 error=self.profile.scrub(str(e))[:300] if self.profile else "")
+                self.notifier.send(Message(
+                    f"⚠️ La cita de {self.who} quedó agendada, pero no pude marcarla en Airtable "
+                    f"({type(e).__name__}). Ponle Status = Booked a mano.", urgent=True))
         return True

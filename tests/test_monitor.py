@@ -109,15 +109,17 @@ class Clock:
 FRIDAY = datetime(2026, 10, 23, 9, 30, tzinfo=cadence.BOGOTA)
 
 
-def make_monitor(items, start=FRIDAY, latencies=None, **overrides):
+def make_monitor(items, start=FRIDAY, latencies=None, cases=None, **overrides):
     tmp = tempfile.mkdtemp()
     settings = replace(Settings(), state_file=os.path.join(tmp, "state.json"),
                        captures_dir=os.path.join(tmp, "captures"),
                        events_file=os.path.join(tmp, "events.jsonl"), **overrides)
     clock = Clock(start)
     notifier = ConsoleNotifier()
+    from dian_monitor.cases import Case
     mon = Monitor(settings, notifier, client=FakeClient(items, latencies), clock=clock,
-                  sleep=clock.sleep, rand=lambda a, b: (a + b) / 2)
+                  sleep=clock.sleep, rand=lambda a, b: (a + b) / 2,
+                  cases=[Case("case-1", "medellin")] if cases is None else cases)
     return mon, notifier, clock
 
 

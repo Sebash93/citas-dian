@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from dian_booker.profile import Profile  # noqa: E402
 from dian_monitor import events  # noqa: E402
 from dian_monitor.client import SchemaChanged  # noqa: E402
-from test_booker import ENV  # noqa: E402
+from test_booker import profile  # noqa: E402
 from test_monitor import FRIDAY, Clock, colas, make_monitor  # noqa: E402
 
 
@@ -82,7 +82,7 @@ class MonitorEventsTest(unittest.TestCase):
 
 class ScrubTest(unittest.TestCase):
     def test_masks_personal_data_in_any_form(self):
-        p = Profile.from_env(ENV)
+        p = profile()
         text = ("Documento 1.017.234.567 de ANA PÉREZ (ana@example.com, 3001234567) "
                 "en https://a-b.trycloudflare.com/vnc.html?password=x")
         clean = p.scrub(text)

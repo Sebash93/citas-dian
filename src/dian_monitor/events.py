@@ -127,10 +127,19 @@ def report(events, since=None):
     if others:
         out.append(f"Openings elsewhere: {len(others)} (last {others[-1]['t']}: {others[-1].get('names')})")
 
+    calls = by_kind.get("airtable_call", [])
+    if calls:
+        ops = {}
+        for c in calls:
+            ops[c.get("op")] = ops.get(c.get("op"), 0) + 1
+        failed = sum(1 for c in calls if not c.get("ok"))
+        out.append(f"\nAirtable calls: {len(calls)} ("
+                   + ", ".join(f"{k} {v}" for k, v in ops.items())
+                   + f"; {failed} failed) — free plan: 1,000 a month")
     attempts = by_kind.get("booker_end", [])
     out.append(f"\nBooker attempts: {len(attempts)}")
     for e in attempts:
-        out.append(f"  {e['t']}  {e.get('case') or 'default'} {e.get('trigger')}  → {e.get('result')}"
+        out.append(f"  {e['t']}  {e.get('case') or '-'} {e.get('trigger')}  → {e.get('result')}"
                    f"{' at ' + e['stage'] if e.get('result') == 'FAILED' else ''}"
                    f"  ({e.get('seconds', 0):.0f} s){'  ' + e['error'] if e.get('error') else ''}")
     stages = {}

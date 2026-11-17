@@ -2,9 +2,9 @@
 
 The monitor dispatches `booker.yml` through the GitHub API with a fine-grained token
 (this repo only, "Actions: read and write") in GITHUB_DISPATCH_TOKEN, one run per case
-(inputs `case` and `trigger`). Runs are named "Booker <case> <trigger>" (`run-name`), which is
-how a run is matched to its case. After a real booking, booker.yml uploads an empty
-`booking-booked-<case>` artifact (`booking-booked` for the default case); while it exists the
+(inputs `case`, `city` and `trigger`). Runs are named "Booker <case> <trigger>" (`run-name`),
+which is how a run is matched to its case. After a real booking, booker.yml uploads an empty
+`booking-booked-<case>` artifact; while it exists the
 monitor starts no more bookers for that case. It is checked on every check (no local cache),
 so deleting the artifact on GitHub re-enables booking at once.
 Errors never include the token: they carry only the HTTP status and GitHub's message.
@@ -14,7 +14,7 @@ import time
 
 import requests
 
-from .cases import DEFAULT_ID, booked_artifact
+from .cases import booked_artifact
 
 API = "https://api.github.com/repos/{repo}/actions/{path}"
 WORKFLOW = "booker.yml"
@@ -31,9 +31,9 @@ class DispatchError(Exception):
 
 
 def case_of(run):
-    """Case id of a booker run from its title; runs from before cases are the default case."""
+    """Case id of a booker run from its title (None for runs from before cases)."""
     m = RUN_NAME_RE.match(f"{run.get('display_title') or ''} ")
-    return m.group(1) if m else DEFAULT_ID
+    return m.group(1) if m else None
 
 
 class GitHubBooker:
@@ -113,7 +113,8 @@ class GitHubBooker:
         if self.running(case):
             return False
         self._call("POST", f"workflows/{WORKFLOW}/dispatches",
-                   json={"ref": self.ref, "inputs": {"trigger": trigger, "case": case.id}})
+                   json={"ref": self.ref, "inputs": {"trigger": trigger, "case": case.id,
+                                                     "city": case.city}})
         self.dispatched[case.id] = self.monotonic()
         return True
 

@@ -14,7 +14,7 @@ FOUND = "FOUND"          # at least one watched city has an open tramite
 class CheckResult:
     status: str
     matches: list = field(default_factory=list)       # tramite names in any watched city
-    other_cities: list = field(default_factory=list)  # open, but in no watched city (log only)
+    other_cities: list = field(default_factory=list)  # open, but not watched (log only)
     raw: dict = None
     by_city: dict = field(default_factory=dict)       # watched city -> its open tramite names
 
@@ -69,8 +69,9 @@ def name_is_in(name, city):
     return prefix == normalize(city)
 
 
-def evaluate(data, cities):
-    """Classify one ValidadorValidar(colas) response for one city or a list of cities."""
+def evaluate(data, cities, service=""):
+    """Classify one ValidadorValidar(colas) response for one city or a list of cities.
+    With `service`, only tramites whose name contains it count; the others are only logged."""
     cities = [cities] if isinstance(cities, str) else list(cities)
     error = data.get("ErrorString")
     step = data.get("DetalleAdicional")
@@ -92,7 +93,7 @@ def evaluate(data, cities):
         if not name:
             raise SchemaChanged("found an item without Nombre")
         city = next((c for c in cities if name_is_in(name, c)), None)
-        if city is None:
+        if city is None or (service and normalize(service) not in normalize(name)):
             others.append(name)
         else:
             by_city.setdefault(city, []).append(name)
